@@ -87,9 +87,27 @@ class ChessDotComAutoBot:
         # -----------------------------
         # 4. Chrome 브라우저 실행
         # -----------------------------
-        print("🌐 브라우저 실행 중...")
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        print("\n🌐 크롬 드라이버 설정")
+        print("1. 로컬 드라이버 사용 (현재 폴더의 chromedriver.exe 사용)")
+        print("2. 자동 설치 (ChromeDriverManager 사용")
+        driver_choice = input("드라이버 방식을 선택하세요 (1 또는 2) [기본: 1]: ").strip()
+
+        print("브라우저 실행 중...")
+        try:
+            if driver_choice == '2':
+                # 자동 설치 사용
+                service = Service(ChromeDriverManager().install())
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            else:
+                # 로컬 드라이버 사용
+                driver_path = "./chromedriver.exe"
+                service = Service(executable_path=driver_path)
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                
+        except Exception as e:
+            print(f"\n❌ 크롬 드라이버 실행 중 에러가 발생했습니다: {e}")
+            print("드라이버 버전을 확인하거나 자동 설치 모드(1)를 사용해 보세요.")
+            exit()
 
         # 자동화 탐지 방지 우회
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
