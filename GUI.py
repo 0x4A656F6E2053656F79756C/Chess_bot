@@ -13,7 +13,7 @@ class HumanPlayer(Player):
 class ChessGame:
     def __init__(self, white_player, black_player):
         pygame.init()
-        self.width, self.height = 700, 700
+        self.width, self.height = 900, 700  # 우측 패널을 위해 기본 너비를 늘렸습니다.
         self.screen = pygame.display.set_mode((self.width, self.height), pygame.RESIZABLE)
         pygame.display.set_caption("Chess Simulator")
         self.clock = pygame.time.Clock()
@@ -31,14 +31,31 @@ class ChessGame:
         self.clicked_already_selected = False
         self.promotion_pieces = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]
         
+        self.resign_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.explicit_result = None
+        
+        # 우측 UI 패널 너비 지정
+        self.UI_WIDTH = 250 
+        
         self.update_dimensions(self.width, self.height)
 
     def update_dimensions(self, width, height):
-        min_dim = min(width, height)
+        # 체스판이 그려질 왼쪽 영역 계산
+        board_area_width = max(width - self.UI_WIDTH, 400) 
+        min_dim = min(board_area_width, height)
+        
         self.SQUARE_SIZE = int(min_dim * 0.8) // 8
-        self.board_x = (width - self.SQUARE_SIZE * 8) // 2
+        self.board_x = (board_area_width - self.SQUARE_SIZE * 8) // 2
         self.board_y = (height - self.SQUARE_SIZE * 8) // 2
         self.piece_images = self.load_images()
+        
+        # 기권 버튼 위치 설정 (우측 UI 패널 하단 중앙)
+        btn_width, btn_height = 120, 45
+        self.resign_button_rect = pygame.Rect(
+            width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
+            height - btn_height - 40, # 바닥에서 40px 위
+            btn_width, btn_height
+        )
 
     def load_images(self):
         symbols = ['P', 'N', 'B', 'R', 'Q', 'K', 'p', 'n', 'b', 'r', 'q', 'k']
@@ -63,10 +80,17 @@ class ChessGame:
         return images
 
     def draw_board(self):
-        self.screen.fill((40, 44, 52)) 
-        colors = [pygame.Color(240, 217, 181), pygame.Color(181, 136, 99)]
+        self.screen.fill((40, 44, 52)) # 전체 배경색
         
+        # --- 우측 UI 패널 배경 ---
+        ui_rect = pygame.Rect(self.width - self.UI_WIDTH, 0, self.UI_WIDTH, self.height)
+        pygame.draw.rect(self.screen, (30, 33, 39), ui_rect) # 약간 더 어두운 색상
+        pygame.draw.line(self.screen, (60, 64, 72), (self.width - self.UI_WIDTH, 0), (self.width - self.UI_WIDTH, self.height), 2) # 구분선
+        
+        colors = [pygame.Color(240, 217, 181), pygame.Color(181, 136, 99)]
         coord_font = pygame.font.SysFont('Arial', max(12, self.SQUARE_SIZE // 4), bold=True)
+        
+        # 좌표(a~h, 1~8) 그리기
         for i in range(8):
             rank_text = coord_font.render(str(i + 1), True, (200, 200, 200))
             rank_rect = rank_text.get_rect(center=(self.board_x - 15, self.board_y + (7 - i) * self.SQUARE_SIZE + self.SQUARE_SIZE // 2))
@@ -75,6 +99,7 @@ class ChessGame:
             file_rect = file_text.get_rect(center=(self.board_x + i * self.SQUARE_SIZE + self.SQUARE_SIZE // 2, self.board_y + 8 * self.SQUARE_SIZE + 15))
             self.screen.blit(file_text, file_rect)
 
+        # 체스판 타일 그리기
         for rank in range(8):
             for file in range(8):
                 color = colors[int((rank + file) % 2 == 0)]
@@ -126,6 +151,19 @@ class ChessGame:
             if piece and self.piece_images.get(piece.symbol()):
                 self.screen.blit(self.piece_images.get(piece.symbol()), self.piece_images.get(piece.symbol()).get_rect(center=self.drag_pos))
 
+        # --- 기권 버튼 그리기 ---
+        current_player = self.players[self.board.turn]
+        if current_player.is_human() and not self.game_over:
+            pygame.draw.rect(self.screen, (200, 60, 60), self.resign_button_rect, border_radius=5)
+            btn_font = pygame.font.SysFont('Arial', 18, bold=True)
+            btn_text = btn_font.render("Resign", True, (255, 255, 255))
+            self.screen.blit(btn_text, btn_text.get_rect(center=self.resign_button_rect.center))
+            
+            # 추후 타이머 위치를 표시하기 위한 텍스트 (임시)
+            timer_font = pygame.font.SysFont('Arial', 24, bold=True)
+            timer_text = timer_font.render("Clock Space", True, (150, 150, 150))
+            self.screen.blit(timer_text, timer_text.get_rect(center=(self.width - self.UI_WIDTH//2, 100)))
+
         if self.promotion_pending: self.draw_promotion_menu()
         if self.game_over: self.draw_game_over_screen()
         pygame.display.flip()
@@ -152,7 +190,7 @@ class ChessGame:
         overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
         self.screen.blit(overlay, (0, 0))
-        font = pygame.font.SysFont('Arial', max(24, self.SQUARE_SIZE), bold=True)
+        font = pygame.font.SysFont('Arial', max(24, self.SQUARE_SIZE // 2), bold=True)
         text_surf = font.render(self.game_result_text, True, (255, 255, 255))
         self.screen.blit(text_surf, text_surf.get_rect(center=(self.width // 2, self.height // 2)))
 
@@ -209,22 +247,45 @@ class ChessGame:
                 elif not self.ai_thinking and current_player.is_human() and not self.promotion_pending and not self.game_over:
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         if event.button == 1: 
+                            
+                            # --- 기권 버튼 클릭 확인 ---
+                            if self.resign_button_rect.collidepoint(event.pos):
+                                self.game_over = True
+                                # 👇 백이 기권하면 0-1, 흑이 기권하면 1-0 저장
+                                self.explicit_result = "0-1" if self.board.turn == chess.WHITE else "1-0"
+                                
+                                winner = "Black" if self.board.turn == chess.WHITE else "White"
+                                loser = "White" if self.board.turn == chess.WHITE else "Black"
+                                self.game_result_text = f"Game Over: {winner} wins ({loser} Resigned)"
+                                continue # 아래의 체스판 클릭 로직 무시
+                            
                             bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
                             if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
                                 clicked_square = chess.square(bx // self.SQUARE_SIZE, 7 - (by // self.SQUARE_SIZE))
+                                
                                 if self.selected_square is None:
-                                    if piece := self.board.piece_at(clicked_square):
-                                        if piece.color == self.board.turn:
-                                            self.selected_square, self.dragging, self.drag_pos, self.clicked_already_selected = clicked_square, True, event.pos, False
+                                    piece = self.board.piece_at(clicked_square)
+                                    if piece and piece.color == self.board.turn:
+                                        self.selected_square = clicked_square
+                                        self.dragging = True
+                                        self.drag_pos = event.pos
+                                        self.clicked_already_selected = False
                                 else:
                                     if clicked_square == self.selected_square:
-                                        self.dragging, self.drag_pos, self.clicked_already_selected = True, event.pos, True 
-                                    elif piece := self.board.piece_at(clicked_square):
-                                        if piece.color == self.board.turn:
-                                            self.selected_square, self.dragging, self.drag_pos, self.clicked_already_selected = clicked_square, True, event.pos, False
+                                        self.dragging = True
+                                        self.drag_pos = event.pos
+                                        self.clicked_already_selected = True 
+                                    else:
+                                        piece = self.board.piece_at(clicked_square)
+                                        if piece and piece.color == self.board.turn:
+                                            self.selected_square = clicked_square
+                                            self.dragging = True
+                                            self.drag_pos = event.pos
+                                            self.clicked_already_selected = False
                                         else:
-                                            self._try_make_move(self.selected_square, clicked_square)
-                                            self.selected_square, self.clicked_already_selected = None, False 
+                                            if self._try_make_move(self.selected_square, clicked_square):
+                                                self.selected_square = None
+                                            self.clicked_already_selected = False
                         elif event.button == 3: 
                             self.selected_square, self.dragging, self.clicked_already_selected = None, False, False
                     elif event.type == pygame.MOUSEMOTION:

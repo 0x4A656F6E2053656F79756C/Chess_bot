@@ -152,11 +152,13 @@ class ChessMCTS:
         self.device = device
         self.num_simulations = num_simulations
 
-    def search(self, initial_board, add_noise=False):
+    def search(self, initial_board, add_noise=False, temperature=0.0): # temperature 파라미터 추가
         root = MCTSNode()
         board = initial_board.copy()
         
         self.expand_node(root, board)
+        
+        # 탐색 전 루트 노드에 디리클레 노이즈 추가 (다양성 확보)
         if add_noise:
             self.add_dirichlet_noise(root)
 
@@ -178,7 +180,22 @@ class ChessMCTS:
 
         if not root.children:
             return random.choice(list(initial_board.legal_moves))
-        return max(root.children.items(), key=lambda item: item[1].visits)[0]
+            
+        # --- 온도(Temperature) 기반 확률적 수 선택 ---
+        if temperature > 0:
+            actions = list(root.children.keys())
+            visits = np.array([root.children[a].visits for a in actions])
+            
+            # 안전한 확률 계산을 위해 온도를 적용
+            visits = visits ** (1.0 / temperature)
+            probs = visits / np.sum(visits)
+            
+            # 확률 분포에 따라 랜덤하게 선택
+            chosen_idx = np.random.choice(len(actions), p=probs)
+            return actions[chosen_idx]
+        else:
+            # 기존 방식: 온도가 0이면 무조건 가장 많이 탐색한 수 선택
+            return max(root.children.items(), key=lambda item: item[1].visits)[0]
 
     def add_dirichlet_noise(self, node, epsilon=0.25, alpha=0.3):
         actions = list(node.children.keys())
@@ -270,7 +287,8 @@ class CNNPlayer(AIPlayer):
         return random.choice(legal_moves)
 
 class MCTSPlayer(AIPlayer):
-    def __init__(self, model_path, simulations=100):
+    # explore_moves와 add_noise 파라미터 추가
+    def __init__(self, model_path, simulations=100, explore_moves=20, add_noise=True):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"[MCTS 수읽기 봇] {model_path} 로딩 중... (장치: {self.device})")
         self.model = TwoHeadChessCNN().to(self.device)
@@ -281,6 +299,9 @@ class MCTSPlayer(AIPlayer):
             self.model = None
             
         self.simulations = simulations
+        self.explore_moves = explore_moves # 탐색을 다양하게 할 초기 수(ply)
+        self.add_noise = add_noise
+        
         if self.model:
             self.model.eval() 
             self.mcts = ChessMCTS(model=self.model, device=self.device, num_simulations=self.simulations)
@@ -293,6 +314,12 @@ class MCTSPlayer(AIPlayer):
 
         print(f"\n🤔 [MCTS] {self.simulations}개의 가상 미래 탐색 중...")
         start_time = time.time()
-        best_move = self.mcts.search(board)
+        
+        # 핵심: 초반 N수 동안은 온도를 0.1, 이후엔 0으로 최적 수만 탐색
+        current_temp = 0.1 if len(board.move_stack) < self.explore_moves else 0.0
+        
+        # search 호출 시 파라미터 전달
+        best_move = self.mcts.search(board, add_noise=self.add_noise, temperature=current_temp)
+        
         print(f"💡 [MCTS] 선택: {best_move} (탐색 시간: {time.time() - start_time:.2f}초)")
         return best_move
