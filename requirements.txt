@@ -1,0 +1,6 @@
+chess==1.10.0
+numpy
+torch
+pygame
+selenium
+webdriver-manager
