@@ -106,7 +106,7 @@ class ChessDotComAutoBot:
                 
         except Exception as e:
             print(f"\n❌ 크롬 드라이버 실행 중 에러가 발생했습니다: {e}")
-            print("드라이버 버전을 확인하거나 자동 설치 모드(1)를 사용해 보세요.")
+            print("드라이버 버전을 확인하거나 자동 설치 모드(2)를 사용해 보세요.")
             exit()
 
         # 자동화 탐지 방지 우회
