@@ -315,8 +315,8 @@ class MCTSPlayer(AIPlayer):
         print(f"\n🤔 [MCTS] {self.simulations}개의 가상 미래 탐색 중...")
         start_time = time.time()
         
-        # 핵심: 초반 N수 동안은 온도를 0.1, 이후엔 0으로 최적 수만 탐색
-        current_temp = 0.1 if len(board.move_stack) < self.explore_moves else 0.0
+        # 핵심: 초반 N수 동안은 온도를 0.5, 이후엔 0으로 최적 수만 탐색
+        current_temp = 0.5 if len(board.move_stack) < self.explore_moves else 0.0
         
         # search 호출 시 파라미터 전달
         best_move = self.mcts.search(board, add_noise=self.add_noise, temperature=current_temp)
