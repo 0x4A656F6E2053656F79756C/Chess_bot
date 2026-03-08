@@ -15,7 +15,6 @@ class HumanPlayer(Player):
     def is_human(self): return True
 
 class ChessGame:
-    # 수정됨: model_path 매개변수 추가
     def __init__(self, white_player, black_player, model_path=None):
         pygame.init()
         self.width, self.height = 900, 700
@@ -36,16 +35,19 @@ class ChessGame:
         self.clicked_already_selected = False
         self.promotion_pieces = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]
         
+        # UI 버튼들
         self.resign_button_rect = pygame.Rect(0, 0, 0, 0)
         self.eval_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.flip_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.undo_button_rect = pygame.Rect(0, 0, 0, 0) # 무르기 버튼 추가
         self.explicit_result = None
         
         self.UI_WIDTH = 250 
         
-        # --- 평가치 관련 변수 ---
         self.show_eval = False
         self.current_eval = 0.0
         self.last_eval_fen = ""
+        self.flip_board = False 
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
@@ -70,18 +72,37 @@ class ChessGame:
         self.piece_images = self.load_images()
         
         btn_width, btn_height = 120, 45
+        
+        # 버튼들을 아래에서 위로 차례대로 쌓습니다.
         self.resign_button_rect = pygame.Rect(
             width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
             height - btn_height - 40,
             btn_width, btn_height
         )
         
-        # 토글 버튼 위치 (기권 버튼 위)
         self.eval_button_rect = pygame.Rect(
             width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
             self.resign_button_rect.y - btn_height - 20,
             btn_width, btn_height
         )
+
+        self.flip_button_rect = pygame.Rect(
+            width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
+            self.eval_button_rect.y - btn_height - 20,
+            btn_width, btn_height
+        )
+        
+        # 무르기 버튼 위치 (보드 회전 버튼 위)
+        self.undo_button_rect = pygame.Rect(
+            width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
+            self.flip_button_rect.y - btn_height - 20,
+            btn_width, btn_height
+        )
+
+    def get_visual_pos(self, file, rank):
+        v_file = 7 - file if self.flip_board else file
+        v_rank = rank if self.flip_board else 7 - rank
+        return self.board_x + v_file * self.SQUARE_SIZE, self.board_y + v_rank * self.SQUARE_SIZE
 
     def load_images(self):
         symbols = ['P', 'N', 'B', 'R', 'Q', 'K', 'p', 'n', 'b', 'r', 'q', 'k']
@@ -112,8 +133,6 @@ class ChessGame:
             tensor = torch.from_numpy(tensor).unsqueeze(0).to(self.device)
             _, value_tensor = self.model(tensor)
             val = value_tensor.item()
-            
-            # 모델은 '현재 턴' 기준의 승률을 반환하므로 항상 '백' 기준으로 통일
             if self.board.turn == chess.BLACK:
                 val = -val
             self.current_eval = val
@@ -129,24 +148,29 @@ class ChessGame:
         coord_font = pygame.font.SysFont('Arial', max(12, self.SQUARE_SIZE // 4), bold=True)
         
         for i in range(8):
+            _, vy = self.get_visual_pos(0, i)
             rank_text = coord_font.render(str(i + 1), True, (200, 200, 200))
-            rank_rect = rank_text.get_rect(center=(self.board_x - 15, self.board_y + (7 - i) * self.SQUARE_SIZE + self.SQUARE_SIZE // 2))
+            rank_rect = rank_text.get_rect(center=(self.board_x - 15, vy + self.SQUARE_SIZE // 2))
             self.screen.blit(rank_text, rank_rect)
+            
+            vx, _ = self.get_visual_pos(i, 0)
             file_text = coord_font.render(chr(ord('a') + i), True, (200, 200, 200))
-            file_rect = file_text.get_rect(center=(self.board_x + i * self.SQUARE_SIZE + self.SQUARE_SIZE // 2, self.board_y + 8 * self.SQUARE_SIZE + 15))
+            file_rect = file_text.get_rect(center=(vx + self.SQUARE_SIZE // 2, self.board_y + 8 * self.SQUARE_SIZE + 15))
             self.screen.blit(file_text, file_rect)
 
         for rank in range(8):
             for file in range(8):
                 color = colors[int((rank + file) % 2 == 0)]
-                rect = pygame.Rect(self.board_x + file * self.SQUARE_SIZE, self.board_y + (7 - rank) * self.SQUARE_SIZE, self.SQUARE_SIZE, self.SQUARE_SIZE)
+                vx, vy = self.get_visual_pos(file, rank)
+                rect = pygame.Rect(vx, vy, self.SQUARE_SIZE, self.SQUARE_SIZE)
                 pygame.draw.rect(self.screen, color, rect)
 
         if self.board.move_stack:
             last_move = self.board.peek()
             for sq in (last_move.from_square, last_move.to_square):
                 file, rank = chess.square_file(sq), chess.square_rank(sq)
-                rect = pygame.Rect(self.board_x + file * self.SQUARE_SIZE, self.board_y + (7 - rank) * self.SQUARE_SIZE, self.SQUARE_SIZE, self.SQUARE_SIZE)
+                vx, vy = self.get_visual_pos(file, rank)
+                rect = pygame.Rect(vx, vy, self.SQUARE_SIZE, self.SQUARE_SIZE)
                 highlight = pygame.Surface((self.SQUARE_SIZE, self.SQUARE_SIZE))
                 highlight.set_alpha(80)
                 highlight.fill((50, 150, 200))
@@ -154,7 +178,8 @@ class ChessGame:
 
         if self.selected_square is not None:
             file, rank = chess.square_file(self.selected_square), chess.square_rank(self.selected_square)
-            rect = pygame.Rect(self.board_x + file * self.SQUARE_SIZE, self.board_y + (7 - rank) * self.SQUARE_SIZE, self.SQUARE_SIZE, self.SQUARE_SIZE)
+            vx, vy = self.get_visual_pos(file, rank)
+            rect = pygame.Rect(vx, vy, self.SQUARE_SIZE, self.SQUARE_SIZE)
             highlight = pygame.Surface((self.SQUARE_SIZE, self.SQUARE_SIZE))
             highlight.set_alpha(100)
             highlight.fill((255, 255, 50))
@@ -168,19 +193,21 @@ class ChessGame:
                     if self.dragging and sq == self.selected_square: continue
                     piece_image = self.piece_images.get(piece.symbol())
                     if piece_image:
-                        rect = pygame.Rect(self.board_x + file * self.SQUARE_SIZE, self.board_y + (7 - rank) * self.SQUARE_SIZE, self.SQUARE_SIZE, self.SQUARE_SIZE)
+                        vx, vy = self.get_visual_pos(file, rank)
+                        rect = pygame.Rect(vx, vy, self.SQUARE_SIZE, self.SQUARE_SIZE)
                         self.screen.blit(piece_image, rect.topleft)
 
         if self.selected_square is not None:
             for move in self.board.legal_moves:
                 if move.from_square == self.selected_square:
                     target_file, target_rank = chess.square_file(move.to_square), chess.square_rank(move.to_square)
+                    vx, vy = self.get_visual_pos(target_file, target_rank)
                     circle_surface = pygame.Surface((self.SQUARE_SIZE, self.SQUARE_SIZE), pygame.SRCALPHA)
                     if self.board.piece_at(move.to_square):
                         pygame.draw.circle(circle_surface, (0, 0, 0, 60), (self.SQUARE_SIZE // 2, self.SQUARE_SIZE // 2), self.SQUARE_SIZE // 2 - 1, max(3, self.SQUARE_SIZE//10))
                     else:
                         pygame.draw.circle(circle_surface, (0, 0, 0, 60), (self.SQUARE_SIZE // 2, self.SQUARE_SIZE // 2), self.SQUARE_SIZE // 6)
-                    self.screen.blit(circle_surface, (self.board_x + target_file * self.SQUARE_SIZE, self.board_y + (7 - target_rank) * self.SQUARE_SIZE))
+                    self.screen.blit(circle_surface, (vx, vy))
 
         if self.dragging and self.selected_square is not None:
             piece = self.board.piece_at(self.selected_square)
@@ -190,19 +217,35 @@ class ChessGame:
         # --- 우측 UI 요소 렌더링 ---
         btn_font = pygame.font.SysFont('Arial', 18, bold=True)
         
-        # 기권 버튼
         current_player = self.players[self.board.turn]
+        
+        # 1. 기권 버튼
         if current_player.is_human() and not self.game_over:
             pygame.draw.rect(self.screen, (200, 60, 60), self.resign_button_rect, border_radius=5)
             btn_text = btn_font.render("Resign", True, (255, 255, 255))
             self.screen.blit(btn_text, btn_text.get_rect(center=self.resign_button_rect.center))
 
-        # 평가치 토글 버튼
+        # 2. 평가치 토글 버튼
         if self.model:
             eval_color = (60, 160, 200) if self.show_eval else (80, 80, 80)
             pygame.draw.rect(self.screen, eval_color, self.eval_button_rect, border_radius=5)
             eval_btn_text = btn_font.render(f"Eval: {'ON' if self.show_eval else 'OFF'}", True, (255, 255, 255))
             self.screen.blit(eval_btn_text, eval_btn_text.get_rect(center=self.eval_button_rect.center))
+
+        # 3. 보드 회전 버튼
+        pygame.draw.rect(self.screen, (100, 150, 100), self.flip_button_rect, border_radius=5)
+        flip_btn_text = btn_font.render("Flip Board", True, (255, 255, 255))
+        self.screen.blit(flip_btn_text, flip_btn_text.get_rect(center=self.flip_button_rect.center))
+
+        # 4. 무르기 (Undo) 버튼
+        # AI가 생각 중이 아닐 때, 그리고 물릴 수 있는 수가 2개 이상일 때만 활성화 (회색으로 비활성화 표현)
+        if not self.ai_thinking and len(self.board.move_stack) >= 2:
+            undo_color = (200, 150, 50)
+        else:
+            undo_color = (80, 80, 80)
+        pygame.draw.rect(self.screen, undo_color, self.undo_button_rect, border_radius=5)
+        undo_btn_text = btn_font.render("Undo (2 Moves)", True, (255, 255, 255))
+        self.screen.blit(undo_btn_text, undo_btn_text.get_rect(center=self.undo_button_rect.center))
 
         # 평가치 바 시각화
         if self.show_eval and self.model:
@@ -214,20 +257,16 @@ class ChessGame:
             bar_width = 30
             bar_height = 250
             eval_x = self.width - self.UI_WIDTH + (self.UI_WIDTH - bar_width) // 2
-            eval_y = (self.height - bar_height) // 2 - 50
+            eval_y = (self.height - bar_height) // 2 - 110 # 버튼이 많아져서 바 위치를 살짝 위로 조정
 
-            # 백의 승률 비율 계산 (-1.0 ~ 1.0 -> 0.0 ~ 1.0)
             white_ratio = (self.current_eval + 1.0) / 2.0
             white_ratio = max(0.0, min(1.0, white_ratio)) 
             
             white_height = int(bar_height * white_ratio)
             black_height = bar_height - white_height
 
-            # 테두리
             pygame.draw.rect(self.screen, (20, 20, 20), (eval_x-2, eval_y-2, bar_width+4, bar_height+4))
-            # 흑 (상단)
             pygame.draw.rect(self.screen, (50, 50, 50), (eval_x, eval_y, bar_width, black_height))
-            # 백 (하단)
             pygame.draw.rect(self.screen, (230, 230, 230), (eval_x, eval_y + black_height, bar_width, white_height))
 
             eval_val_font = pygame.font.SysFont('Arial', 22, bold=True)
@@ -316,14 +355,32 @@ class ChessGame:
                             self.board.push(chess.Move(self.promotion_pending[0], self.promotion_pending[1], promotion=self.promotion_pieces[index]))
                             self.promotion_pending = None
                 
-                # 마우스 클릭 이벤트 (독립된 UI 버튼 체크 포함)
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    # 1. 평가치 토글 버튼 클릭 확인
+                    # 1. 평가치 토글 버튼
                     if self.eval_button_rect.collidepoint(event.pos) and self.model:
                         self.show_eval = not self.show_eval
                         continue
                         
-                    # 2. 기권 버튼 클릭 확인
+                    # 2. 보드 회전 버튼
+                    if self.flip_button_rect.collidepoint(event.pos):
+                        self.flip_board = not self.flip_board
+                        continue
+                        
+                    # 3. 무르기(Undo) 버튼 - 두 수(내 수 + AI 수) 무르기
+                    if self.undo_button_rect.collidepoint(event.pos):
+                        if not self.ai_thinking and len(self.board.move_stack) >= 2:
+                            self.board.pop() # 상대(AI)의 수 되돌리기
+                            self.board.pop() # 나의 수 되돌리기
+                            
+                            # 선택 상태 및 게임 종료 상태 초기화
+                            self.selected_square = None
+                            self.dragging = False
+                            self.game_over = False
+                            self.explicit_result = None
+                            self.promotion_pending = None
+                        continue
+                        
+                    # 4. 기권 버튼
                     if self.resign_button_rect.collidepoint(event.pos):
                         if current_player.is_human() and not self.game_over:
                             self.game_over = True
@@ -333,11 +390,16 @@ class ChessGame:
                             self.game_result_text = f"Game Over: {winner} wins ({loser} Resigned)"
                         continue
 
-                    # 3. 체스판 조작 로직
+                    # 5. 체스판 조작 로직
                     if not self.ai_thinking and current_player.is_human() and not self.promotion_pending and not self.game_over:
                         bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
                         if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
-                            clicked_square = chess.square(bx // self.SQUARE_SIZE, 7 - (by // self.SQUARE_SIZE))
+                            v_file = bx // self.SQUARE_SIZE
+                            v_rank = by // self.SQUARE_SIZE
+                            file = 7 - v_file if self.flip_board else v_file
+                            rank = v_rank if self.flip_board else 7 - v_rank
+                            
+                            clicked_square = chess.square(file, rank)
                             
                             if self.selected_square is None:
                                 piece = self.board.piece_at(clicked_square)
@@ -376,7 +438,12 @@ class ChessGame:
                         if self.selected_square is not None:
                             bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
                             if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
-                                released_square = chess.square(bx // self.SQUARE_SIZE, 7 - (by // self.SQUARE_SIZE))
+                                v_file = bx // self.SQUARE_SIZE
+                                v_rank = by // self.SQUARE_SIZE
+                                file = 7 - v_file if self.flip_board else v_file
+                                rank = v_rank if self.flip_board else 7 - v_rank
+                                released_square = chess.square(file, rank)
+                                
                                 if released_square != self.selected_square:
                                     if self._try_make_move(self.selected_square, released_square): self.selected_square = None
                                 elif getattr(self, 'clicked_already_selected', False): self.selected_square = None
