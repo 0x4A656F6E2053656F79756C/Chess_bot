@@ -2,6 +2,10 @@ import chess
 import pygame
 import threading
 import time
+import torch
+
+# AI 관련 모듈 임포트
+from AI import TwoHeadChessCNN, board_to_tensor
 
 class Player:
     def is_human(self): return True
@@ -11,9 +15,10 @@ class HumanPlayer(Player):
     def is_human(self): return True
 
 class ChessGame:
-    def __init__(self, white_player, black_player):
+    # 수정됨: model_path 매개변수 추가
+    def __init__(self, white_player, black_player, model_path=None):
         pygame.init()
-        self.width, self.height = 900, 700  # 우측 패널을 위해 기본 너비를 늘렸습니다.
+        self.width, self.height = 900, 700
         self.screen = pygame.display.set_mode((self.width, self.height), pygame.RESIZABLE)
         pygame.display.set_caption("Chess Simulator")
         self.clock = pygame.time.Clock()
@@ -32,15 +37,30 @@ class ChessGame:
         self.promotion_pieces = [chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT]
         
         self.resign_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.eval_button_rect = pygame.Rect(0, 0, 0, 0)
         self.explicit_result = None
         
-        # 우측 UI 패널 너비 지정
         self.UI_WIDTH = 250 
         
+        # --- 평가치 관련 변수 ---
+        self.show_eval = False
+        self.current_eval = 0.0
+        self.last_eval_fen = ""
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = None
+        if model_path:
+            try:
+                self.model = TwoHeadChessCNN().to(self.device)
+                self.model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=True))
+                self.model.eval()
+            except Exception as e:
+                print(f"평가치용 모델 로드 실패: {e}")
+                self.model = None
+                
         self.update_dimensions(self.width, self.height)
 
     def update_dimensions(self, width, height):
-        # 체스판이 그려질 왼쪽 영역 계산
         board_area_width = max(width - self.UI_WIDTH, 400) 
         min_dim = min(board_area_width, height)
         
@@ -49,11 +69,17 @@ class ChessGame:
         self.board_y = (height - self.SQUARE_SIZE * 8) // 2
         self.piece_images = self.load_images()
         
-        # 기권 버튼 위치 설정 (우측 UI 패널 하단 중앙)
         btn_width, btn_height = 120, 45
         self.resign_button_rect = pygame.Rect(
             width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
-            height - btn_height - 40, # 바닥에서 40px 위
+            height - btn_height - 40,
+            btn_width, btn_height
+        )
+        
+        # 토글 버튼 위치 (기권 버튼 위)
+        self.eval_button_rect = pygame.Rect(
+            width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
+            self.resign_button_rect.y - btn_height - 20,
             btn_width, btn_height
         )
 
@@ -79,18 +105,29 @@ class ChessGame:
                 images[symbol] = surf
         return images
 
+    def _update_evaluation(self):
+        if not self.model: return
+        with torch.no_grad():
+            tensor = board_to_tensor(self.board)
+            tensor = torch.from_numpy(tensor).unsqueeze(0).to(self.device)
+            _, value_tensor = self.model(tensor)
+            val = value_tensor.item()
+            
+            # 모델은 '현재 턴' 기준의 승률을 반환하므로 항상 '백' 기준으로 통일
+            if self.board.turn == chess.BLACK:
+                val = -val
+            self.current_eval = val
+
     def draw_board(self):
-        self.screen.fill((40, 44, 52)) # 전체 배경색
+        self.screen.fill((40, 44, 52))
         
-        # --- 우측 UI 패널 배경 ---
         ui_rect = pygame.Rect(self.width - self.UI_WIDTH, 0, self.UI_WIDTH, self.height)
-        pygame.draw.rect(self.screen, (30, 33, 39), ui_rect) # 약간 더 어두운 색상
-        pygame.draw.line(self.screen, (60, 64, 72), (self.width - self.UI_WIDTH, 0), (self.width - self.UI_WIDTH, self.height), 2) # 구분선
+        pygame.draw.rect(self.screen, (30, 33, 39), ui_rect)
+        pygame.draw.line(self.screen, (60, 64, 72), (self.width - self.UI_WIDTH, 0), (self.width - self.UI_WIDTH, self.height), 2)
         
         colors = [pygame.Color(240, 217, 181), pygame.Color(181, 136, 99)]
         coord_font = pygame.font.SysFont('Arial', max(12, self.SQUARE_SIZE // 4), bold=True)
         
-        # 좌표(a~h, 1~8) 그리기
         for i in range(8):
             rank_text = coord_font.render(str(i + 1), True, (200, 200, 200))
             rank_rect = rank_text.get_rect(center=(self.board_x - 15, self.board_y + (7 - i) * self.SQUARE_SIZE + self.SQUARE_SIZE // 2))
@@ -99,7 +136,6 @@ class ChessGame:
             file_rect = file_text.get_rect(center=(self.board_x + i * self.SQUARE_SIZE + self.SQUARE_SIZE // 2, self.board_y + 8 * self.SQUARE_SIZE + 15))
             self.screen.blit(file_text, file_rect)
 
-        # 체스판 타일 그리기
         for rank in range(8):
             for file in range(8):
                 color = colors[int((rank + file) % 2 == 0)]
@@ -151,18 +187,53 @@ class ChessGame:
             if piece and self.piece_images.get(piece.symbol()):
                 self.screen.blit(self.piece_images.get(piece.symbol()), self.piece_images.get(piece.symbol()).get_rect(center=self.drag_pos))
 
-        # --- 기권 버튼 그리기 ---
+        # --- 우측 UI 요소 렌더링 ---
+        btn_font = pygame.font.SysFont('Arial', 18, bold=True)
+        
+        # 기권 버튼
         current_player = self.players[self.board.turn]
         if current_player.is_human() and not self.game_over:
             pygame.draw.rect(self.screen, (200, 60, 60), self.resign_button_rect, border_radius=5)
-            btn_font = pygame.font.SysFont('Arial', 18, bold=True)
             btn_text = btn_font.render("Resign", True, (255, 255, 255))
             self.screen.blit(btn_text, btn_text.get_rect(center=self.resign_button_rect.center))
+
+        # 평가치 토글 버튼
+        if self.model:
+            eval_color = (60, 160, 200) if self.show_eval else (80, 80, 80)
+            pygame.draw.rect(self.screen, eval_color, self.eval_button_rect, border_radius=5)
+            eval_btn_text = btn_font.render(f"Eval: {'ON' if self.show_eval else 'OFF'}", True, (255, 255, 255))
+            self.screen.blit(eval_btn_text, eval_btn_text.get_rect(center=self.eval_button_rect.center))
+
+        # 평가치 바 시각화
+        if self.show_eval and self.model:
+            current_fen = self.board.fen()
+            if current_fen != self.last_eval_fen:
+                self._update_evaluation()
+                self.last_eval_fen = current_fen
+
+            bar_width = 30
+            bar_height = 250
+            eval_x = self.width - self.UI_WIDTH + (self.UI_WIDTH - bar_width) // 2
+            eval_y = (self.height - bar_height) // 2 - 50
+
+            # 백의 승률 비율 계산 (-1.0 ~ 1.0 -> 0.0 ~ 1.0)
+            white_ratio = (self.current_eval + 1.0) / 2.0
+            white_ratio = max(0.0, min(1.0, white_ratio)) 
             
-            # 추후 타이머 위치를 표시하기 위한 텍스트 (임시)
-            timer_font = pygame.font.SysFont('Arial', 24, bold=True)
-            timer_text = timer_font.render("Clock Space", True, (150, 150, 150))
-            self.screen.blit(timer_text, timer_text.get_rect(center=(self.width - self.UI_WIDTH//2, 100)))
+            white_height = int(bar_height * white_ratio)
+            black_height = bar_height - white_height
+
+            # 테두리
+            pygame.draw.rect(self.screen, (20, 20, 20), (eval_x-2, eval_y-2, bar_width+4, bar_height+4))
+            # 흑 (상단)
+            pygame.draw.rect(self.screen, (50, 50, 50), (eval_x, eval_y, bar_width, black_height))
+            # 백 (하단)
+            pygame.draw.rect(self.screen, (230, 230, 230), (eval_x, eval_y + black_height, bar_width, white_height))
+
+            eval_val_font = pygame.font.SysFont('Arial', 22, bold=True)
+            eval_str = f"{self.current_eval:+.2f}"
+            val_text = eval_val_font.render(eval_str, True, (255, 255, 255))
+            self.screen.blit(val_text, val_text.get_rect(center=(eval_x + bar_width // 2, eval_y - 20)))
 
         if self.promotion_pending: self.draw_promotion_menu()
         if self.game_over: self.draw_game_over_screen()
@@ -244,64 +315,73 @@ class ChessGame:
                         if 0 <= (index := (x - start_x) // self.SQUARE_SIZE) < 4:
                             self.board.push(chess.Move(self.promotion_pending[0], self.promotion_pending[1], promotion=self.promotion_pieces[index]))
                             self.promotion_pending = None
-                elif not self.ai_thinking and current_player.is_human() and not self.promotion_pending and not self.game_over:
-                    if event.type == pygame.MOUSEBUTTONDOWN:
-                        if event.button == 1: 
+                
+                # 마우스 클릭 이벤트 (독립된 UI 버튼 체크 포함)
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    # 1. 평가치 토글 버튼 클릭 확인
+                    if self.eval_button_rect.collidepoint(event.pos) and self.model:
+                        self.show_eval = not self.show_eval
+                        continue
+                        
+                    # 2. 기권 버튼 클릭 확인
+                    if self.resign_button_rect.collidepoint(event.pos):
+                        if current_player.is_human() and not self.game_over:
+                            self.game_over = True
+                            self.explicit_result = "0-1" if self.board.turn == chess.WHITE else "1-0"
+                            winner = "Black" if self.board.turn == chess.WHITE else "White"
+                            loser = "White" if self.board.turn == chess.WHITE else "Black"
+                            self.game_result_text = f"Game Over: {winner} wins ({loser} Resigned)"
+                        continue
+
+                    # 3. 체스판 조작 로직
+                    if not self.ai_thinking and current_player.is_human() and not self.promotion_pending and not self.game_over:
+                        bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
+                        if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
+                            clicked_square = chess.square(bx // self.SQUARE_SIZE, 7 - (by // self.SQUARE_SIZE))
                             
-                            # --- 기권 버튼 클릭 확인 ---
-                            if self.resign_button_rect.collidepoint(event.pos):
-                                self.game_over = True
-                                # 👇 백이 기권하면 0-1, 흑이 기권하면 1-0 저장
-                                self.explicit_result = "0-1" if self.board.turn == chess.WHITE else "1-0"
-                                
-                                winner = "Black" if self.board.turn == chess.WHITE else "White"
-                                loser = "White" if self.board.turn == chess.WHITE else "Black"
-                                self.game_result_text = f"Game Over: {winner} wins ({loser} Resigned)"
-                                continue # 아래의 체스판 클릭 로직 무시
-                            
-                            bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
-                            if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
-                                clicked_square = chess.square(bx // self.SQUARE_SIZE, 7 - (by // self.SQUARE_SIZE))
-                                
-                                if self.selected_square is None:
+                            if self.selected_square is None:
+                                piece = self.board.piece_at(clicked_square)
+                                if piece and piece.color == self.board.turn:
+                                    self.selected_square = clicked_square
+                                    self.dragging = True
+                                    self.drag_pos = event.pos
+                                    self.clicked_already_selected = False
+                            else:
+                                if clicked_square == self.selected_square:
+                                    self.dragging = True
+                                    self.drag_pos = event.pos
+                                    self.clicked_already_selected = True 
+                                else:
                                     piece = self.board.piece_at(clicked_square)
                                     if piece and piece.color == self.board.turn:
                                         self.selected_square = clicked_square
                                         self.dragging = True
                                         self.drag_pos = event.pos
                                         self.clicked_already_selected = False
-                                else:
-                                    if clicked_square == self.selected_square:
-                                        self.dragging = True
-                                        self.drag_pos = event.pos
-                                        self.clicked_already_selected = True 
                                     else:
-                                        piece = self.board.piece_at(clicked_square)
-                                        if piece and piece.color == self.board.turn:
-                                            self.selected_square = clicked_square
-                                            self.dragging = True
-                                            self.drag_pos = event.pos
-                                            self.clicked_already_selected = False
-                                        else:
-                                            if self._try_make_move(self.selected_square, clicked_square):
-                                                self.selected_square = None
-                                            self.clicked_already_selected = False
-                        elif event.button == 3: 
-                            self.selected_square, self.dragging, self.clicked_already_selected = None, False, False
-                    elif event.type == pygame.MOUSEMOTION:
-                        if self.dragging: self.drag_pos = event.pos
-                    elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                        if self.dragging:
-                            self.dragging = False
-                            if self.selected_square is not None:
-                                bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
-                                if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
-                                    released_square = chess.square(bx // self.SQUARE_SIZE, 7 - (by // self.SQUARE_SIZE))
-                                    if released_square != self.selected_square:
-                                        if self._try_make_move(self.selected_square, released_square): self.selected_square = None
-                                    elif getattr(self, 'clicked_already_selected', False): self.selected_square = None
-                                else: self.selected_square = None
-                                self.clicked_already_selected = False
+                                        if self._try_make_move(self.selected_square, clicked_square):
+                                            self.selected_square = None
+                                        self.clicked_already_selected = False
+                                        
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+                    if not self.ai_thinking and current_player.is_human() and not self.game_over:
+                        self.selected_square, self.dragging, self.clicked_already_selected = None, False, False
+                        
+                elif event.type == pygame.MOUSEMOTION:
+                    if self.dragging: self.drag_pos = event.pos
+                    
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if self.dragging:
+                        self.dragging = False
+                        if self.selected_square is not None:
+                            bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
+                            if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
+                                released_square = chess.square(bx // self.SQUARE_SIZE, 7 - (by // self.SQUARE_SIZE))
+                                if released_square != self.selected_square:
+                                    if self._try_make_move(self.selected_square, released_square): self.selected_square = None
+                                elif getattr(self, 'clicked_already_selected', False): self.selected_square = None
+                            else: self.selected_square = None
+                            self.clicked_already_selected = False
 
             if not self.ai_thinking and not current_player.is_human() and not self.promotion_pending and not self.game_over:
                 self.handle_ai_move()
