@@ -23,8 +23,10 @@ if __name__ == "__main__":
     print("3. MCTS vs MCTS")
     print("4. 사람 vs 사람")
     print("5. MCTS 봇 vs 사람")
+    print("6. 사람 vs CNN 봇")
+    print("7. CNN 봇 vs CNN 봇")
     
-    mode = input("모드 선택 (1~5): ").strip()
+    mode = input("모드 선택 (1~7): ").strip()
     
     print("\n[핸디캡 설정]")
     print("0. 핸디캡 없음 (기본)")
@@ -48,6 +50,12 @@ if __name__ == "__main__":
     elif mode == '5': 
         player1 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=6, add_noise=False)
         player2 = HumanPlayer()
+    elif mode == '6':
+        player1 = HumanPlayer()
+        player2 = CNNPlayer(model_path=MODEL_PATH)
+    elif mode == '7':
+        player1 = CNNPlayer(model_path=MODEL_PATH)
+        player2 = CNNPlayer(model_path=MODEL_PATH)
     else: 
         player1 = HumanPlayer()
         player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=6, add_noise=False)
