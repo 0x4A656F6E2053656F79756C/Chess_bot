@@ -38,7 +38,7 @@ if __name__ == "__main__":
     
     if mode == '2':
         player1 = CNNPlayer(model_path=MODEL_PATH)
-        player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=100)
+        player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=10, add_noise=False)
     elif mode == '3':
         player1 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=20, add_noise=True)
         player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=20, add_noise=True)
