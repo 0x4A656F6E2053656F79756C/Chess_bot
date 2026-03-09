@@ -34,7 +34,8 @@ if __name__ == "__main__":
     print("2. 백 룩(Rook, a1) 제거")
     print("3. 백 나이트(Knight, b1) 제거")
     print("4. 흑 퀸(Queen) 제거")
-    handicap = input("핸디캡 선택 (0~4) [기본: 0]: ").strip()
+    print("5. 흑 룩(Rook, a8) 제거")
+    handicap = input("핸디캡 선택 (0~5) [기본: 0]: ").strip()
     if not handicap:
         handicap = '0'
     
@@ -71,8 +72,10 @@ if __name__ == "__main__":
         game.board.remove_piece_at(chess.B1) # 백 퀸사이드 나이트 제거
     elif handicap == '4':
         game.board.remove_piece_at(chess.D8) # 흑 퀸 제거
+    elif handicap == '5':
+        game.board.remove_piece_at(chess.A8) # 흑 퀸사이드 룩 제거
 
-    if handicap in ['1', '2', '3', '4']:
+    if handicap in ['1', '2', '3', '4', '5']:
         # 기물이 사라졌으므로, 룩이나 킹이 없어졌을 때를 대비해 캐슬링 권한을 정리합니다.
         game.board.clean_castling_rights()
         print(f"\n✅ 핸디캡 모드({handicap}번)가 적용되었습니다!")

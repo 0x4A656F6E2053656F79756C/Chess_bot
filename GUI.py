@@ -454,5 +454,9 @@ class ChessGame:
                 self.handle_ai_move()
 
             self.draw_board()
-            self.clock.tick(60)
+            # [수정된 부분] AI가 생각 중일 때는 2 FPS, 아닐 때는 60 FPS
+            if self.ai_thinking:
+                self.clock.tick(2)  # 메인 스레드를 거의 재워서 AI 스레드에 자원(GIL) 몰아주기
+            else:
+                self.clock.tick(60) # 사람이 조작할 때는 부드럽게 유지
         pygame.quit()
