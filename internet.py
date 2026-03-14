@@ -26,9 +26,9 @@ class ChessDotComAutoBot:
         # -----------------------------
         # 1. 모델 및 시뮬레이션 설정
         # -----------------------------
-        model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v3.pth): ").strip()
+        model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v4.pth): ").strip()
         if not model_name:
-            model_name = "model_v3.pth"
+            model_name = "model_v4.pth"
         self.model_path = os.path.join("model", model_name)
 
         color = input("어떤 진영으로 플레이하시나요? (W: 백 / B: 흑) [기본: W]: ").strip().upper()
@@ -185,6 +185,10 @@ class ChessDotComAutoBot:
                     san = moves[target_ply - 1].text.strip()
                     move = self.board.parse_san(san)
                     self.board.push(move)
+                    
+                    # 🌟 추가된 부분: 파악한 상대방의 수를 MCTS 트리에 반영
+                    self.mcts.update_with_move(move) 
+                    
                     print(f"🎯 상대 수 파악: {san}")
                     break
             except Exception as e:
@@ -208,20 +212,21 @@ class ChessDotComAutoBot:
                (self.board.turn == chess.BLACK and not self.play_as_white):
                 
                 print("\n🤔 AI 계산중...")
-                # 실전에서는 오프닝 다양성을 위해 초반 6수(ply) 정도만 온도를 아주 낮게(0.1) 줍니다.
-                # 매번 똑같은 수만 두는 게 상관없다면 처음부터 temp = 0.0 으로 하셔도 됩니다.
                 temp = 0.1 if len(self.board.move_stack) < 6 else 0.0
                 
-                # 실전 경기이므로 억지 탐색을 유도하는 디리클레 노이즈는 끕니다 (add_noise=False)
                 move = self.mcts.search(
                     self.board,
                     add_noise=False, 
                     temperature=temp
                 )
 
-                # [수정됨] 웹 브라우저에서 실제 이동이 성공했을 때만 내부 board 업데이트 (엇갈림 방지)
+                # [수정됨] 웹 브라우저에서 실제 이동이 성공했을 때만 내부 board 업데이트
                 if self.click_square(move.uci()):
                     self.board.push(move)
+                    
+                    # 🌟 추가된 부분: AI가 실제로 둔 수를 MCTS 트리에 반영
+                    self.mcts.update_with_move(move) 
+                    
                 else:
                     print("⚠️ 웹 이동에 실패하여 재시도합니다.")
                     time.sleep(1)

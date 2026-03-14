@@ -146,24 +146,57 @@ class MCTSNode:
     def is_expanded(self):
         return len(self.children) > 0
 
+# ==========================================
+# 3. 몬테카를로 트리 탐색 (MCTS)
+# ==========================================
+class MCTSNode:
+    def __init__(self, parent=None, action=None, prior_prob=0.0):
+        self.parent = parent
+        self.action = action  
+        self.children = {}  
+        self.visits = 0       
+        self.value_sum = 0.0  
+        self.prior_prob = prior_prob  
+
+    def q_value(self):
+        return self.value_sum / self.visits if self.visits > 0 else 0.0
+
+    def ucb_score(self, parent_visits, c_puct=2.0):
+        q = -self.q_value()
+        u = c_puct * self.prior_prob * math.sqrt(parent_visits) / (1 + self.visits)
+        return q + u
+
+    def is_expanded(self):
+        return len(self.children) > 0
+
 class ChessMCTS:
     def __init__(self, model, device, num_simulations=800): 
         self.model = model
         self.device = device
         self.num_simulations = num_simulations
+        self.root = MCTSNode() # 🌟 개선점 3: 트리 재사용을 위해 루트 노드 유지
 
-    def search(self, initial_board, add_noise=False, temperature=0.0): # temperature 파라미터 추가
-        root = MCTSNode()
+    def update_with_move(self, move):
+        """실제 게임에서 상대방이나 내가 수를 두었을 때 트리를 해당 노드로 전진시킵니다."""
+        if move in self.root.children:
+            self.root = self.root.children[move]
+            self.root.parent = None # 메모리 확보를 위해 부모 노드와의 연결 해제
+        else:
+            self.root = MCTSNode() # 예상치 못한 수일 경우 트리를 초기화
+
+    def search(self, initial_board, add_noise=False, temperature=0.0):
         board = initial_board.copy()
         
-        self.expand_node(root, board)
+        # 🌟 매번 새로 루트를 만드는 대신 유지된 self.root를 확장
+        if not self.root.is_expanded():
+            self.expand_node(self.root, board)
         
         # 탐색 전 루트 노드에 디리클레 노이즈 추가 (다양성 확보)
         if add_noise:
-            self.add_dirichlet_noise(root)
+            self.add_dirichlet_noise(self.root)
 
         for _ in range(self.num_simulations):
-            node = root
+            node = self.root
             search_path = [node]
             
             while node.is_expanded():
@@ -178,24 +211,21 @@ class ChessMCTS:
             value = self.evaluate_node(node, board)
             self.backpropagate(search_path, value, board)
 
-        if not root.children:
+        if not self.root.children:
             return random.choice(list(initial_board.legal_moves))
             
         # --- 온도(Temperature) 기반 확률적 수 선택 ---
         if temperature > 0:
-            actions = list(root.children.keys())
-            visits = np.array([root.children[a].visits for a in actions])
+            actions = list(self.root.children.keys())
+            visits = np.array([self.root.children[a].visits for a in actions])
             
-            # 안전한 확률 계산을 위해 온도를 적용
             visits = visits ** (1.0 / temperature)
             probs = visits / np.sum(visits)
             
-            # 확률 분포에 따라 랜덤하게 선택
             chosen_idx = np.random.choice(len(actions), p=probs)
             return actions[chosen_idx]
         else:
-            # 기존 방식: 온도가 0이면 무조건 가장 많이 탐색한 수 선택
-            return max(root.children.items(), key=lambda item: item[1].visits)[0]
+            return max(self.root.children.items(), key=lambda item: item[1].visits)[0]
 
     def add_dirichlet_noise(self, node, epsilon=0.25, alpha=0.3):
         actions = list(node.children.keys())
@@ -220,22 +250,41 @@ class ChessMCTS:
 
     def get_model_output(self, board):
         legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return {}, 0.0
+
         with torch.no_grad():
             tensor = board_to_tensor(board)
             tensor = torch.from_numpy(tensor).unsqueeze(0).to(self.device)
             logits, value_tensor = self.model(tensor)
             
-            logits = logits[0]
+            logits = logits[0].cpu().numpy()
             value = value_tensor.item()
             
             move_probs = {}
+            legal_indices = []
+            valid_moves = []
+            
             for move in legal_moves:
                 idx = MOVE_TO_ID.get(move.uci())
-                move_probs[move] = math.exp(logits[idx].item()) if idx is not None else 1e-6 
+                if idx is not None:
+                    legal_indices.append(idx)
+                    valid_moves.append(move)
+                    
+            if legal_indices:
+                # 🌟 개선점 1: 수치적으로 안정적인 Softmax 연산 적용 (오버플로우 방지)
+                legal_logits = logits[legal_indices]
+                max_logit = np.max(legal_logits)
+                exp_logits = np.exp(legal_logits - max_logit)
+                probs = exp_logits / np.sum(exp_logits)
                 
-            total_prob = sum(move_probs.values())
-            if total_prob > 0:
-                for move in move_probs: move_probs[move] /= total_prob
+                for move, prob in zip(valid_moves, probs):
+                    move_probs[move] = prob
+            else:
+                # 예외 처리: 매핑되지 않은 수가 있을 경우 균등 분포
+                prob = 1.0 / len(legal_moves)
+                for move in legal_moves:
+                    move_probs[move] = prob
                 
         return move_probs, value
     
@@ -287,7 +336,6 @@ class CNNPlayer(AIPlayer):
         return random.choice(legal_moves)
 
 class MCTSPlayer(AIPlayer):
-    # explore_moves와 add_noise 파라미터 추가
     def __init__(self, model_path, simulations=100, explore_moves=20, add_noise=True):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"[MCTS 수읽기 봇] {model_path} 로딩 중... (장치: {self.device})")
@@ -299,8 +347,9 @@ class MCTSPlayer(AIPlayer):
             self.model = None
             
         self.simulations = simulations
-        self.explore_moves = explore_moves # 탐색을 다양하게 할 초기 수(ply)
+        self.explore_moves = explore_moves
         self.add_noise = add_noise
+        self.last_move_count = 0 # 🌟 보드 기록 동기화를 위해 추가
         
         if self.model:
             self.model.eval() 
@@ -312,13 +361,17 @@ class MCTSPlayer(AIPlayer):
         if self.model is None:
             time.sleep(0.5); return random.choice(legal_moves)
 
+        # 🌟 현재 보드 상태에 맞춰 밀린 수(상대방의 수 등)를 트리에 반영하여 동기화
+        while self.last_move_count < len(board.move_stack):
+            move = board.move_stack[self.last_move_count]
+            self.mcts.update_with_move(move)
+            self.last_move_count += 1
+
         print(f"\n🤔 [MCTS] {self.simulations}개의 가상 미래 탐색 중...")
         start_time = time.time()
         
-        # 핵심: 초반 N수 동안은 온도를 0.7, 이후엔 0으로 최적 수만 탐색
         current_temp = 0.7 if len(board.move_stack) < self.explore_moves else 0.0
         
-        # search 호출 시 파라미터 전달
         best_move = self.mcts.search(board, add_noise=self.add_noise, temperature=current_temp)
         
         print(f"💡 [MCTS] 선택: {best_move} (탐색 시간: {time.time() - start_time:.2f}초)")
