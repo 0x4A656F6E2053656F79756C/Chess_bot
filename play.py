@@ -11,9 +11,9 @@ if __name__ == "__main__":
 
     print("=== 체스 AI 로컬 매치 시뮬레이터 ===")
     
-    model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v2.pth): ").strip()
+    model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v3.pth): ").strip()
     if not model_name:
-        model_name = "model_v2.pth"
+        model_name = "model_v3.pth"
     
     MODEL_PATH = os.path.join("model", model_name)
     
@@ -35,13 +35,14 @@ if __name__ == "__main__":
     print("3. 백 나이트(Knight, b1) 제거")
     print("4. 흑 퀸(Queen) 제거")
     print("5. 흑 룩(Rook, a8) 제거")
-    handicap = input("핸디캡 선택 (0~5) [기본: 0]: ").strip()
+    print("6. 흑 나이트(Knight, b8) 제거")
+    handicap = input("핸디캡 선택 (0~6) [기본: 0]: ").strip()
     if not handicap:
         handicap = '0'
     
     if mode == '2':
         player1 = CNNPlayer(model_path=MODEL_PATH)
-        player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=10, add_noise=False)
+        player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=50, explore_moves=10, add_noise=False)
     elif mode == '3':
         player1 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=20, add_noise=True)
         player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=20, add_noise=True)
@@ -74,8 +75,10 @@ if __name__ == "__main__":
         game.board.remove_piece_at(chess.D8) # 흑 퀸 제거
     elif handicap == '5':
         game.board.remove_piece_at(chess.A8) # 흑 퀸사이드 룩 제거
+    elif handicap == '6':
+        game.board.remove_piece_at(chess.B8) # 흑 퀸사이드 나이트 제거
 
-    if handicap in ['1', '2', '3', '4', '5']:
+    if handicap in ['1', '2', '3', '4', '5', '6']:
         # 기물이 사라졌으므로, 룩이나 킹이 없어졌을 때를 대비해 캐슬링 권한을 정리합니다.
         game.board.clean_castling_rights()
         print(f"\n✅ 핸디캡 모드({handicap}번)가 적용되었습니다!")

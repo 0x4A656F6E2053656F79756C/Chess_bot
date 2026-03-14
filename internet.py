@@ -26,9 +26,9 @@ class ChessDotComAutoBot:
         # -----------------------------
         # 1. 모델 및 시뮬레이션 설정
         # -----------------------------
-        model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v2.pth): ").strip()
+        model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v3.pth): ").strip()
         if not model_name:
-            model_name = "model_v2.pth"
+            model_name = "model_v3.pth"
         self.model_path = os.path.join("model", model_name)
 
         color = input("어떤 진영으로 플레이하시나요? (W: 백 / B: 흑) [기본: W]: ").strip().upper()
