@@ -39,12 +39,14 @@ class ChessGame:
         self.resign_button_rect = pygame.Rect(0, 0, 0, 0)
         self.eval_button_rect = pygame.Rect(0, 0, 0, 0)
         self.flip_button_rect = pygame.Rect(0, 0, 0, 0)
-        self.undo_button_rect = pygame.Rect(0, 0, 0, 0) # 무르기 버튼 추가
+        self.undo_button_rect = pygame.Rect(0, 0, 0, 0)
+        self.heatmap_button_rect = pygame.Rect(0, 0, 0, 0) # 🌟 히트맵 버튼 추가
         self.explicit_result = None
         
         self.UI_WIDTH = 250 
         
         self.show_eval = False
+        self.show_heatmap = False # 🌟 히트맵 토글 상태
         self.current_eval = 0.0
         self.last_eval_fen = ""
         self.flip_board = False 
@@ -72,32 +74,14 @@ class ChessGame:
         self.piece_images = self.load_images()
         
         btn_width, btn_height = 120, 45
+        btn_x = width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2
         
         # 버튼들을 아래에서 위로 차례대로 쌓습니다.
-        self.resign_button_rect = pygame.Rect(
-            width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
-            height - btn_height - 40,
-            btn_width, btn_height
-        )
-        
-        self.eval_button_rect = pygame.Rect(
-            width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
-            self.resign_button_rect.y - btn_height - 20,
-            btn_width, btn_height
-        )
-
-        self.flip_button_rect = pygame.Rect(
-            width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
-            self.eval_button_rect.y - btn_height - 20,
-            btn_width, btn_height
-        )
-        
-        # 무르기 버튼 위치 (보드 회전 버튼 위)
-        self.undo_button_rect = pygame.Rect(
-            width - self.UI_WIDTH + (self.UI_WIDTH - btn_width) // 2,
-            self.flip_button_rect.y - btn_height - 20,
-            btn_width, btn_height
-        )
+        self.resign_button_rect = pygame.Rect(btn_x, height - btn_height - 30, btn_width, btn_height)
+        self.eval_button_rect = pygame.Rect(btn_x, self.resign_button_rect.y - btn_height - 15, btn_width, btn_height)
+        self.flip_button_rect = pygame.Rect(btn_x, self.eval_button_rect.y - btn_height - 15, btn_width, btn_height)
+        self.undo_button_rect = pygame.Rect(btn_x, self.flip_button_rect.y - btn_height - 15, btn_width, btn_height)
+        self.heatmap_button_rect = pygame.Rect(btn_x, self.undo_button_rect.y - btn_height - 15, btn_width, btn_height) # 히트맵 버튼 위치
 
     def get_visual_pos(self, file, rank):
         v_file = 7 - file if self.flip_board else file
@@ -185,6 +169,62 @@ class ChessGame:
             highlight.fill((255, 255, 50))
             self.screen.blit(highlight, rect.topleft)
 
+        # 🌟 히트맵 데이터 미리 계산
+        top_moves_data = []
+        if self.show_heatmap:
+            # 🐛 버그 수정: 항상 '현재 턴'인 플레이어의 MCTS 트리를 참조하도록 변경
+            current_player = self.players[self.board.turn]
+            mcts_player = current_player if hasattr(current_player, 'mcts') and current_player.mcts is not None else None
+            
+            if mcts_player and hasattr(mcts_player.mcts, 'root'):
+                try:
+                    children = list(mcts_player.mcts.root.children.items())
+                    valid_children = [(move, child) for move, child in children if child.visits > 0]
+                    valid_children.sort(key=lambda x: x[1].visits, reverse=True)
+                    
+                    # 🌟 표시 개수를 5개에서 최상위 3개로 축소
+                    top_children = valid_children[:3]
+                    
+                    if top_children:
+                        max_v = top_children[0][1].visits
+                        for idx, (move, child) in enumerate(top_children):
+                            win_rate = (-child.q_value() + 1.0) / 2.0 * 100.0
+                            top_moves_data.append({
+                                'move': move,
+                                'visits': child.visits,
+                                'win_rate': win_rate,
+                                'is_best': (idx == 0),
+                                'intensity': child.visits / max_v if max_v > 0 else 0
+                            })
+                except RuntimeError:
+                    pass
+
+        # 🌟 1단계: 히트맵 바닥 색칠 및 빨간색 원 (기물 밑에 깔림)
+        if self.show_heatmap and top_moves_data:
+            drawn_sqs = set()
+            for data in top_moves_data:
+                to_sq = data['move'].to_square
+                if to_sq not in drawn_sqs:
+                    drawn_sqs.add(to_sq) 
+                    vx, vy = self.get_visual_pos(chess.square_file(to_sq), chess.square_rank(to_sq))
+                    overlay = pygame.Surface((self.SQUARE_SIZE, self.SQUARE_SIZE), pygame.SRCALPHA)
+                    
+                    if data['is_best']:
+                        overlay.fill((0, 200, 255, 140))
+                    else:
+                        r = int(255 * (1 - data['intensity']))
+                        g = int(255 * data['intensity'])
+                        overlay.fill((r, g, 0, 120))
+                    
+                    self.screen.blit(overlay, (vx, vy))
+
+                    # 최선의 수인 경우: 사각형 테두리 대신 칸 중앙을 기준으로 빨간색 두꺼운 원 그리기
+                    if data['is_best']:
+                        center = (vx + self.SQUARE_SIZE // 2, vy + self.SQUARE_SIZE // 2)
+                        radius = self.SQUARE_SIZE // 2 - 2
+                        pygame.draw.circle(self.screen, (255, 0, 0), center, radius, 4)
+
+        # 🌟 2단계: 기물 렌더링
         for rank in range(8):
             for file in range(8):
                 sq = chess.square(file, rank)
@@ -214,9 +254,72 @@ class ChessGame:
             if piece and self.piece_images.get(piece.symbol()):
                 self.screen.blit(self.piece_images.get(piece.symbol()), self.piece_images.get(piece.symbol()).get_rect(center=self.drag_pos))
 
+        # 🌟 3단계: 화살표 그리기 (더 두껍고 뚜렷하게)
+        if self.show_heatmap and top_moves_data:
+            import math
+            for data in reversed(top_moves_data): 
+                from_sq = data['move'].from_square
+                to_sq = data['move'].to_square
+                vx, vy = self.get_visual_pos(chess.square_file(to_sq), chess.square_rank(to_sq))
+                fx, fy = self.get_visual_pos(chess.square_file(from_sq), chess.square_rank(from_sq))
+
+                start_pos = (fx + self.SQUARE_SIZE // 2, fy + self.SQUARE_SIZE // 2)
+                end_pos = (vx + self.SQUARE_SIZE // 2, vy + self.SQUARE_SIZE // 2)
+
+                distance = math.hypot(end_pos[0] - start_pos[0], end_pos[1] - start_pos[1])
+                if distance > self.SQUARE_SIZE * 0.4:
+                    angle = math.atan2(end_pos[1] - start_pos[1], end_pos[0] - start_pos[0])
+                    
+                    adjusted_end = (
+                        end_pos[0] - math.cos(angle) * (self.SQUARE_SIZE * 0.4),
+                        end_pos[1] - math.sin(angle) * (self.SQUARE_SIZE * 0.4)
+                    )
+
+                    arrow_color = (255, 50, 50) if data['is_best'] else (180, 180, 180)
+                    
+                    # 선 두께 증가 (최선의 수: 6, 일반 수: 3)
+                    line_thickness = 6 if data['is_best'] else 3
+
+                    pygame.draw.line(self.screen, arrow_color, start_pos, adjusted_end, line_thickness)
+
+                    # 화살표 머리(삼각형) 크기 증가 (12 -> 16으로 더 큼지막하게)
+                    head_size = 16 
+                    p1 = (adjusted_end[0] - head_size * math.cos(angle - math.pi/6), adjusted_end[1] - head_size * math.sin(angle - math.pi/6))
+                    p2 = (adjusted_end[0] - head_size * math.cos(angle + math.pi/6), adjusted_end[1] - head_size * math.sin(angle + math.pi/6))
+                    pygame.draw.polygon(self.screen, arrow_color, [adjusted_end, p1, p2])
+
+        # 🌟 4단계: 텍스트 렌더링 (화살표, 기물 위에 항상 고정)
+        if self.show_heatmap and top_moves_data:
+            font_small = pygame.font.SysFont('Arial', max(11, self.SQUARE_SIZE // 5), bold=True)
+            drawn_text_sqs = set()
+            
+            for data in top_moves_data:
+                to_sq = data['move'].to_square
+                
+                if to_sq not in drawn_text_sqs:
+                    drawn_text_sqs.add(to_sq)
+                    
+                    vx, vy = self.get_visual_pos(chess.square_file(to_sq), chess.square_rank(to_sq))
+                    
+                    mid_x = vx + self.SQUARE_SIZE // 2
+                    mid_y = vy + self.SQUARE_SIZE // 2
+
+                    text_v = font_small.render(f"N:{data['visits']}", True, (255, 255, 255))
+                    text_q = font_small.render(f"{data['win_rate']:.1f}%", True, (255, 255, 255))
+
+                    v_rect = text_v.get_rect(center=(mid_x, mid_y - 10))
+                    q_rect = text_q.get_rect(center=(mid_x, mid_y + 10))
+
+                    bg_rect = v_rect.union(q_rect).inflate(10, 6)
+                    bg_surface = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
+                    bg_surface.fill((0, 0, 0, 180)) 
+                    self.screen.blit(bg_surface, bg_rect.topleft)
+
+                    self.screen.blit(text_v, v_rect)
+                    self.screen.blit(text_q, q_rect)
+
         # --- 우측 UI 요소 렌더링 ---
         btn_font = pygame.font.SysFont('Arial', 18, bold=True)
-        
         current_player = self.players[self.board.turn]
         
         # 1. 기권 버튼
@@ -238,7 +341,6 @@ class ChessGame:
         self.screen.blit(flip_btn_text, flip_btn_text.get_rect(center=self.flip_button_rect.center))
 
         # 4. 무르기 (Undo) 버튼
-        # AI가 생각 중이 아닐 때, 그리고 물릴 수 있는 수가 2개 이상일 때만 활성화 (회색으로 비활성화 표현)
         if not self.ai_thinking and len(self.board.move_stack) >= 2:
             undo_color = (200, 150, 50)
         else:
@@ -246,6 +348,12 @@ class ChessGame:
         pygame.draw.rect(self.screen, undo_color, self.undo_button_rect, border_radius=5)
         undo_btn_text = btn_font.render("Undo (2 Moves)", True, (255, 255, 255))
         self.screen.blit(undo_btn_text, undo_btn_text.get_rect(center=self.undo_button_rect.center))
+
+        # 5. 히트맵 버튼
+        heatmap_color = (150, 80, 200) if self.show_heatmap else (80, 80, 80)
+        pygame.draw.rect(self.screen, heatmap_color, self.heatmap_button_rect, border_radius=5)
+        hm_btn_text = btn_font.render(f"Heatmap: {'ON' if self.show_heatmap else 'OFF'}", True, (255, 255, 255))
+        self.screen.blit(hm_btn_text, hm_btn_text.get_rect(center=self.heatmap_button_rect.center))
 
         # 평가치 바 시각화
         if self.show_eval and self.model:
@@ -257,7 +365,7 @@ class ChessGame:
             bar_width = 30
             bar_height = 250
             eval_x = self.width - self.UI_WIDTH + (self.UI_WIDTH - bar_width) // 2
-            eval_y = (self.height - bar_height) // 2 - 110 # 버튼이 많아져서 바 위치를 살짝 위로 조정
+            eval_y = (self.height - bar_height) // 2 - 130 
 
             white_ratio = (self.current_eval + 1.0) / 2.0
             white_ratio = max(0.0, min(1.0, white_ratio)) 
@@ -356,23 +464,18 @@ class ChessGame:
                             self.promotion_pending = None
                 
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    # 1. 평가치 토글 버튼
                     if self.eval_button_rect.collidepoint(event.pos) and self.model:
                         self.show_eval = not self.show_eval
                         continue
                         
-                    # 2. 보드 회전 버튼
                     if self.flip_button_rect.collidepoint(event.pos):
                         self.flip_board = not self.flip_board
                         continue
                         
-                    # 3. 무르기(Undo) 버튼 - 두 수(내 수 + AI 수) 무르기
                     if self.undo_button_rect.collidepoint(event.pos):
                         if not self.ai_thinking and len(self.board.move_stack) >= 2:
-                            self.board.pop() # 상대(AI)의 수 되돌리기
-                            self.board.pop() # 나의 수 되돌리기
-                            
-                            # 선택 상태 및 게임 종료 상태 초기화
+                            self.board.pop() 
+                            self.board.pop() 
                             self.selected_square = None
                             self.dragging = False
                             self.game_over = False
@@ -380,7 +483,10 @@ class ChessGame:
                             self.promotion_pending = None
                         continue
                         
-                    # 4. 기권 버튼
+                    if self.heatmap_button_rect.collidepoint(event.pos):
+                        self.show_heatmap = not self.show_heatmap
+                        continue
+                        
                     if self.resign_button_rect.collidepoint(event.pos):
                         if current_player.is_human() and not self.game_over:
                             self.game_over = True
@@ -390,7 +496,6 @@ class ChessGame:
                             self.game_result_text = f"Game Over: {winner} wins ({loser} Resigned)"
                         continue
 
-                    # 5. 체스판 조작 로직
                     if not self.ai_thinking and current_player.is_human() and not self.promotion_pending and not self.game_over:
                         bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
                         if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
@@ -454,9 +559,9 @@ class ChessGame:
                 self.handle_ai_move()
 
             self.draw_board()
-            # [수정된 부분] AI가 생각 중일 때는 2 FPS, 아닐 때는 60 FPS
+            
             if self.ai_thinking:
-                self.clock.tick(2)  # 메인 스레드를 거의 재워서 AI 스레드에 자원(GIL) 몰아주기
+                self.clock.tick(1) 
             else:
-                self.clock.tick(60) # 사람이 조작할 때는 부드럽게 유지
+                self.clock.tick(60) 
         pygame.quit()

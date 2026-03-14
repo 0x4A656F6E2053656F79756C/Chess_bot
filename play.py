@@ -11,9 +11,9 @@ if __name__ == "__main__":
 
     print("=== 체스 AI 로컬 매치 시뮬레이터 ===")
     
-    model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v3.pth): ").strip()
+    model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v4.pth): ").strip()
     if not model_name:
-        model_name = "model_v3.pth"
+        model_name = "model_v4.pth"
     
     MODEL_PATH = os.path.join("model", model_name)
     
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     
     if mode == '2':
         player1 = CNNPlayer(model_path=MODEL_PATH)
-        player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=50, explore_moves=10, add_noise=False)
+        player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=10, add_noise=False)
     elif mode == '3':
         player1 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=20, add_noise=True)
         player2 = MCTSPlayer(model_path=MODEL_PATH, simulations=100, explore_moves=20, add_noise=True)
