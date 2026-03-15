@@ -138,30 +138,7 @@ class MCTSNode:
     def q_value(self):
         return self.value_sum / self.visits if self.visits > 0 else 0.0
 
-    def ucb_score(self, parent_visits, c_puct=2.0):
-        q = -self.q_value()
-        u = c_puct * self.prior_prob * math.sqrt(parent_visits) / (1 + self.visits)
-        return q + u
-
-    def is_expanded(self):
-        return len(self.children) > 0
-
-# ==========================================
-# 3. 몬테카를로 트리 탐색 (MCTS)
-# ==========================================
-class MCTSNode:
-    def __init__(self, parent=None, action=None, prior_prob=0.0):
-        self.parent = parent
-        self.action = action  
-        self.children = {}  
-        self.visits = 0       
-        self.value_sum = 0.0  
-        self.prior_prob = prior_prob  
-
-    def q_value(self):
-        return self.value_sum / self.visits if self.visits > 0 else 0.0
-
-    def ucb_score(self, parent_visits, c_puct=2.0):
+    def ucb_score(self, parent_visits, c_puct=1.0):
         q = -self.q_value()
         u = c_puct * self.prior_prob * math.sqrt(parent_visits) / (1 + self.visits)
         return q + u
