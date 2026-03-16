@@ -11,9 +11,9 @@ if __name__ == "__main__":
 
     print("=== 체스 AI 로컬 매치 시뮬레이터 ===")
     
-    model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v4.pth): ").strip()
+    model_name = input("사용할 모델 파일 이름 (model/ 폴더 내, 기본: model_v5.pth): ").strip()
     if not model_name:
-        model_name = "model_v4.pth"
+        model_name = "model_v5.pth"
     
     MODEL_PATH = os.path.join("model", model_name)
     

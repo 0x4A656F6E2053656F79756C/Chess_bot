@@ -8,7 +8,7 @@ checkpoint = torch.load(checkpoint_path, map_location='cpu')
 pure_weights = checkpoint['model_state_dict']
 
 # 3. 새로운 이름으로 깔끔하게 저장하기
-save_path = "model_v4.pth"
+save_path = "model_v5.pth"
 torch.save(pure_weights, save_path)
 
 print(f"✅ 가중치 분리 완료! 이제 {save_path} 파일을 봇에 바로 적용할 수 있습니다.")
