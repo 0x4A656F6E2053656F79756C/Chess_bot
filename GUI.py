@@ -15,15 +15,22 @@ class HumanPlayer(Player):
     def is_human(self): return True
 
 class ChessGame:
-    def __init__(self, white_player, black_player, model_path=None):
+    # 파라미터에 spectator_mode=False 추가
+    def __init__(self, white_player, black_player, model_path=None, spectator_mode=False):
         pygame.init()
         self.width, self.height = 900, 700
         self.screen = pygame.display.set_mode((self.width, self.height), pygame.RESIZABLE)
-        pygame.display.set_caption("Chess Simulator")
+        
+        # 창 제목 변경
+        pygame.display.set_caption("Chess Simulator" if not spectator_mode else "Chess Spectator Mode")
         self.clock = pygame.time.Clock()
         
         self.board = chess.Board()
         self.players = {chess.WHITE: white_player, chess.BLACK: black_player}
+        
+        # 관전 모드 여부와 FPS 저장 (관전 모드면 2 FPS로 낮춰서 연산량 대폭 감소)
+        self.spectator_mode = spectator_mode 
+        self.fps = 2 if spectator_mode else 60
         
         self.selected_square = None
         self.ai_thinking = False
@@ -323,7 +330,7 @@ class ChessGame:
         current_player = self.players[self.board.turn]
         
         # 1. 기권 버튼
-        if current_player.is_human() and not self.game_over:
+        if not self.spectator_mode and current_player.is_human() and not self.game_over:
             pygame.draw.rect(self.screen, (200, 60, 60), self.resign_button_rect, border_radius=5)
             btn_text = btn_font.render("Resign", True, (255, 255, 255))
             self.screen.blit(btn_text, btn_text.get_rect(center=self.resign_button_rect.center))
@@ -341,13 +348,11 @@ class ChessGame:
         self.screen.blit(flip_btn_text, flip_btn_text.get_rect(center=self.flip_button_rect.center))
 
         # 4. 무르기 (Undo) 버튼
-        if not self.ai_thinking and len(self.board.move_stack) >= 2:
-            undo_color = (200, 150, 50)
-        else:
-            undo_color = (80, 80, 80)
-        pygame.draw.rect(self.screen, undo_color, self.undo_button_rect, border_radius=5)
-        undo_btn_text = btn_font.render("Undo (2 Moves)", True, (255, 255, 255))
-        self.screen.blit(undo_btn_text, undo_btn_text.get_rect(center=self.undo_button_rect.center))
+        if not self.spectator_mode:
+            undo_color = (200, 150, 50) if not self.ai_thinking and len(self.board.move_stack) >= 2 else (80, 80, 80)
+            pygame.draw.rect(self.screen, undo_color, self.undo_button_rect, border_radius=5)
+            undo_btn_text = btn_font.render("Undo (2 Moves)", True, (255, 255, 255))
+            self.screen.blit(undo_btn_text, undo_btn_text.get_rect(center=self.undo_button_rect.center))
 
         # 5. 히트맵 버튼
         heatmap_color = (150, 80, 200) if self.show_heatmap else (80, 80, 80)
@@ -472,96 +477,85 @@ class ChessGame:
                         self.flip_board = not self.flip_board
                         continue
                         
-                    if self.undo_button_rect.collidepoint(event.pos):
-                        if not self.ai_thinking and len(self.board.move_stack) >= 2:
-                            self.board.pop() 
-                            self.board.pop() 
-                            self.selected_square = None
-                            self.dragging = False
-                            self.game_over = False
-                            self.explicit_result = None
-                            self.promotion_pending = None
-                        continue
-                        
                     if self.heatmap_button_rect.collidepoint(event.pos):
                         self.show_heatmap = not self.show_heatmap
                         continue
-                        
-                    if self.resign_button_rect.collidepoint(event.pos):
-                        if current_player.is_human() and not self.game_over:
-                            self.game_over = True
-                            self.explicit_result = "0-1" if self.board.turn == chess.WHITE else "1-0"
-                            winner = "Black" if self.board.turn == chess.WHITE else "White"
-                            loser = "White" if self.board.turn == chess.WHITE else "Black"
-                            self.game_result_text = f"Game Over: {winner} wins ({loser} Resigned)"
+                    
+                    # 🌟 관전 모드에서는 기권, 무르기 버튼 기능 차단
+                    if not self.spectator_mode:
+                        if self.undo_button_rect.collidepoint(event.pos):
+                            if not self.ai_thinking and len(self.board.move_stack) >= 2:
+                                self.board.pop(); self.board.pop() 
+                                self.selected_square = None; self.dragging = False; self.game_over = False
+                                self.explicit_result = None; self.promotion_pending = None
+                            continue
+                            
+                        if self.resign_button_rect.collidepoint(event.pos):
+                            if current_player.is_human() and not self.game_over:
+                                self.game_over = True
+                                self.explicit_result = "0-1" if self.board.turn == chess.WHITE else "1-0"
+                                winner = "Black" if self.board.turn == chess.WHITE else "White"
+                                loser = "White" if self.board.turn == chess.WHITE else "Black"
+                                self.game_result_text = f"Game Over: {winner} wins ({loser} Resigned)"
+                            continue
+
+                    # 🌟 관전 모드에서는 마우스 드래그 조작 전면 차단
+                    if self.spectator_mode:
                         continue
 
                     if not self.ai_thinking and current_player.is_human() and not self.promotion_pending and not self.game_over:
                         bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
                         if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
-                            v_file = bx // self.SQUARE_SIZE
-                            v_rank = by // self.SQUARE_SIZE
+                            v_file, v_rank = bx // self.SQUARE_SIZE, by // self.SQUARE_SIZE
                             file = 7 - v_file if self.flip_board else v_file
                             rank = v_rank if self.flip_board else 7 - v_rank
-                            
                             clicked_square = chess.square(file, rank)
                             
                             if self.selected_square is None:
                                 piece = self.board.piece_at(clicked_square)
                                 if piece and piece.color == self.board.turn:
-                                    self.selected_square = clicked_square
-                                    self.dragging = True
-                                    self.drag_pos = event.pos
-                                    self.clicked_already_selected = False
+                                    self.selected_square = clicked_square; self.dragging = True; self.drag_pos = event.pos
                             else:
                                 if clicked_square == self.selected_square:
-                                    self.dragging = True
-                                    self.drag_pos = event.pos
-                                    self.clicked_already_selected = True 
+                                    self.dragging = True; self.drag_pos = event.pos; self.clicked_already_selected = True 
                                 else:
                                     piece = self.board.piece_at(clicked_square)
                                     if piece and piece.color == self.board.turn:
-                                        self.selected_square = clicked_square
-                                        self.dragging = True
-                                        self.drag_pos = event.pos
-                                        self.clicked_already_selected = False
+                                        self.selected_square = clicked_square; self.dragging = True; self.drag_pos = event.pos; self.clicked_already_selected = False
                                     else:
-                                        if self._try_make_move(self.selected_square, clicked_square):
-                                            self.selected_square = None
+                                        if self._try_make_move(self.selected_square, clicked_square): self.selected_square = None
                                         self.clicked_already_selected = False
                                         
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-                    if not self.ai_thinking and current_player.is_human() and not self.game_over:
+                    if not self.spectator_mode and not self.ai_thinking and current_player.is_human() and not self.game_over:
                         self.selected_square, self.dragging, self.clicked_already_selected = None, False, False
                         
                 elif event.type == pygame.MOUSEMOTION:
-                    if self.dragging: self.drag_pos = event.pos
+                    if not self.spectator_mode and self.dragging: self.drag_pos = event.pos
                     
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                    if self.dragging:
+                    if not self.spectator_mode and self.dragging:
                         self.dragging = False
                         if self.selected_square is not None:
                             bx, by = event.pos[0] - self.board_x, event.pos[1] - self.board_y
                             if 0 <= bx < self.SQUARE_SIZE * 8 and 0 <= by < self.SQUARE_SIZE * 8:
-                                v_file = bx // self.SQUARE_SIZE
-                                v_rank = by // self.SQUARE_SIZE
-                                file = 7 - v_file if self.flip_board else v_file
-                                rank = v_rank if self.flip_board else 7 - v_rank
+                                v_file, v_rank = bx // self.SQUARE_SIZE, by // self.SQUARE_SIZE
+                                file, rank = 7 - v_file if self.flip_board else v_file, v_rank if self.flip_board else 7 - v_rank
                                 released_square = chess.square(file, rank)
-                                
                                 if released_square != self.selected_square:
                                     if self._try_make_move(self.selected_square, released_square): self.selected_square = None
                                 elif getattr(self, 'clicked_already_selected', False): self.selected_square = None
                             else: self.selected_square = None
                             self.clicked_already_selected = False
 
-            if not self.ai_thinking and not current_player.is_human() and not self.promotion_pending and not self.game_over:
+            if not self.spectator_mode and not self.ai_thinking and not current_player.is_human() and not self.promotion_pending and not self.game_over:
                 self.handle_ai_move()
 
             self.draw_board()
             
+            # 🌟 관전 모드면 2 FPS로 떨어뜨려 엄청난 최적화 달성
             if self.ai_thinking:
                 self.clock.tick(1) 
             else:
-                self.clock.tick(60) 
+                self.clock.tick(self.fps) 
         pygame.quit()
