@@ -6,6 +6,7 @@ import torch
 
 # AI 관련 모듈 임포트
 from AI import TwoHeadChessCNN, board_to_tensor
+from config import device
 
 class Player:
     def is_human(self): return True
@@ -58,7 +59,7 @@ class ChessGame:
         self.last_eval_fen = ""
         self.flip_board = False 
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         self.model = None
         if model_path:
             try:

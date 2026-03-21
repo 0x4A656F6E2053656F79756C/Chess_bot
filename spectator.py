@@ -12,6 +12,7 @@ from selenium.webdriver.chrome.options import Options
 
 from AI import TwoHeadChessCNN, ChessMCTS
 from GUI import ChessGame, Player
+from config import device
 
 class SpectatorPlayer(Player):
     def __init__(self, mcts):
@@ -35,7 +36,7 @@ class ChessSpectator:
             model_name = "model_v5.pth"
         self.model_path = os.path.join("model", model_name)
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         print(f"🤖 AI 모델 로딩 중... ({self.device})")
         
         self.model = TwoHeadChessCNN().to(self.device)

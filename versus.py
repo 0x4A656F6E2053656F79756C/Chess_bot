@@ -1,144 +1,84 @@
 import chess
-import chess.pgn
-import datetime
+import torch
 import os
-import pygame
-import threading
-import time
+import glob
+from AI import TwoHeadChessCNN, MCTSPlayer
+from config import device
 
-from AI import MCTSPlayer
-from GUI import ChessGame  # GUI.py에서 ChessGame 클래스 임포트
-
-GAMES = 6
-MODEL_PATH = "model/model_v2.pth"
-
-def auto_close_monitor(game):
-    """게임이 종료되면 3초 대기 후 자동으로 GUI 창을 닫는 데몬 스레드"""
-    while not getattr(game, 'game_over', False):
-        time.sleep(0.5)
+def play_game(white_player, black_player):
+    board = chess.Board()
+    # 🌟 공정한 대결을 위해 턴 수를 제한하거나 무승부 조건을 체크합니다.
+    move_count = 0
+    while not board.is_game_over() and move_count < 150:
+        current_player = white_player if board.turn == chess.WHITE else black_player
+        
+        # 🌡️ 실력 측정을 위한 온도 전략: 
+        # 처음 8수(4무브)까지만 탐험(1.0)을 허용하고 이후엔 최선의 수(0.0)만 둡니다.
+        temp = 1.0 if move_count < 8 else 0.0
+        
+        # MCTSPlayer의 get_move를 활용하되, 내부적으로 temp가 적용되도록 합니다.
+        # (필요 시 MCTSPlayer 클래스의 get_move에 temp 인자를 추가하거나 
+        # 아래처럼 직접 mcts.search를 호출할 수 있습니다.)
+        move = current_player.mcts.search(board, add_noise=False, temperature=temp)
+        
+        board.push(move)
+        current_player.mcts.update_with_move(move)
+        # 상대방 플레이어의 트리도 동기화해줍니다.
+        other_player = black_player if board.turn == chess.WHITE else white_player
+        other_player.mcts.update_with_move(move)
+        
+        move_count += 1
     
-    # 결과를 확인할 수 있게 3초 대기
-    time.sleep(3)
-    
-    # Pygame 종료 이벤트를 발생시켜 game.run() 루프를 탈출하게 만듦
-    pygame.event.post(pygame.event.Event(pygame.QUIT))
+    return board.result()
 
-def play_single_game_with_gui(white_player, black_player):
-    # [추가] 창을 화면 중앙에 띄우기 위한 설정 (반드시 set_mode 호출 전에 실행)
-    os.environ['SDL_VIDEO_CENTERED'] = '1'
-    
-    # GUI 인스턴스 생성
-    game = ChessGame(white_player, black_player, model_path=MODEL_PATH)
-    
-    # 평가 막대 켜기
-    game.show_eval = True
-    
-    # [수정] 전체 화면 대신 적절한 고정 크기 설정 (예: 1200x800)
-    # 모니터 해상도보다 작게 설정해야 '창'으로 보입니다.
-    window_width = 1200
-    window_height = 800
-    
-    game.width, game.height = window_width, window_height
-    # pygame.FULLSCREEN 제거
-    game.screen = pygame.display.set_mode((game.width, game.height)) 
-    
-    # GUI 내부 크기 업데이트
-    game.update_dimensions(game.width, game.height)
+def run_arena(model_path_a, model_path_b, total_games=10):
+    print(f"⚔️  대결 시작: {os.path.basename(model_path_a)} vs {os.path.basename(model_path_b)}")
+    print(f"Using device: {device}\n")
 
-    # AI 메서드 안전 장치
-    white_player.is_human = lambda: False
-    black_player.is_human = lambda: False
+    # 플레이어 초기화 (수읽기 깊이는 공평하게 100으로 설정)
+    p_a = MCTSPlayer(model_path_a, simulations=100)
+    p_b = MCTSPlayer(model_path_b, simulations=100)
 
-    # 자동 닫기 스레드 시작
-    threading.Thread(target=auto_close_monitor, args=(game,), daemon=True).start()
+    results = {"A_win": 0, "B_win": 0, "Draw": 0}
 
-    # 게임 진행
-    game.run()
+    for i in range(total_games):
+        # 진영 교대 (공정성을 위해 짝수 판은 진영을 바꿉니다)
+        if i % 2 == 0:
+            white, black = p_a, p_b
+            side_a = chess.WHITE
+        else:
+            white, black = p_b, p_a
+            side_a = chess.BLACK
+            
+        print(f"🎮 [{i+1}/{total_games}] 경기 진행 중...", end="\r")
+        res_str = play_game(white, black)
+        
+        # 결과 집계
+        if res_str == "1-0":
+            if side_a == chess.WHITE: results["A_win"] += 1
+            else: results["B_win"] += 1
+        elif res_str == "0-1":
+            if side_a == chess.BLACK: results["A_win"] += 1
+            else: results["B_win"] += 1
+        else:
+            results["Draw"] += 1
+            
+        # 매 게임 후 트리 초기화 (다음 게임에 영향 주지 않기 위해)
+        from AI import ChessMCTS
+        p_a.mcts = ChessMCTS(p_a.model, device, num_simulations=100)
+        p_b.mcts = ChessMCTS(p_b.model, device, num_simulations=100)
 
-    return game.board
+    print(f"\n\n🏆 최종 결과:")
+    print(f" - {os.path.basename(model_path_a)}: {results['A_win']}승")
+    print(f" - {os.path.basename(model_path_b)}: {results['B_win']}승")
+    print(f" - 무승부: {results['Draw']}회")
+    
+    win_rate = (results['A_win'] + 0.5 * results['Draw']) / total_games * 100
+    print(f"\n📊 {os.path.basename(model_path_a)}의 기대 승률: {win_rate:.1f}%")
 
 if __name__ == "__main__":
+    # 🔍 비교할 모델 경로 설정
+    OLD_MODEL = "model/model_v2.pth"
+    NEW_MODEL = "model/model_v5.pth"
 
-    os.makedirs("notes", exist_ok=True)
-
-    print("=== Player 1 vs Player 2 GUI 테스트 ===")
-
-    results = {
-        "player1_win": 0,
-        "player2_win": 0,
-        "draw": 0
-    }
-
-    # 초반 동안 다양한 수 탐색
-    EXPLORE_MOVES = 10
-    
-    # 각 플레이어의 시뮬레이션 수치
-    P1_SIMULATIONS = 50
-    P2_SIMULATIONS = 100
-
-    for game_idx in range(GAMES):
-
-        print(f"\n===== Game {game_idx+1}/{GAMES} =====")
-
-        # 색 번갈아 할당
-        if game_idx % 2 == 0:
-            white_player = MCTSPlayer(model_path=MODEL_PATH, simulations=P1_SIMULATIONS, explore_moves=EXPLORE_MOVES, add_noise=True)
-            black_player = MCTSPlayer(model_path=MODEL_PATH, simulations=P2_SIMULATIONS, explore_moves=EXPLORE_MOVES, add_noise=True)
-
-            white_tag = "Player 1"
-            black_tag = "Player 2"
-
-        else:
-            white_player = MCTSPlayer(model_path=MODEL_PATH, simulations=P2_SIMULATIONS, explore_moves=EXPLORE_MOVES, add_noise=True)
-            black_player = MCTSPlayer(model_path=MODEL_PATH, simulations=P1_SIMULATIONS, explore_moves=EXPLORE_MOVES, add_noise=True)
-
-            white_tag = "Player 2"
-            black_tag = "Player 1"
-
-        # GUI와 함께 게임 실행
-        board = play_single_game_with_gui(white_player, black_player)
-
-        result = board.result()
-        print("Result:", result)
-
-        # 승패 기록
-        if result == "1-0":
-            if white_tag == "Player 1":
-                results["player1_win"] += 1
-            else:
-                results["player2_win"] += 1
-
-        elif result == "0-1":
-            if black_tag == "Player 1":
-                results["player1_win"] += 1
-            else:
-                results["player2_win"] += 1
-
-        else:
-            results["draw"] += 1
-
-        # PGN 저장
-        game_pgn = chess.pgn.Game.from_board(board)
-
-        game_pgn.headers["Event"] = "Player 1 vs Player 2 Test"
-        game_pgn.headers["White"] = white_tag
-        game_pgn.headers["Black"] = black_tag
-        game_pgn.headers["Result"] = result
-
-        filename = datetime.datetime.now().strftime(f"notes/mcts_test_%Y%m%d_%H%M%S_{game_idx}.pgn")
-
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(str(game_pgn))
-
-        print("PGN saved:", filename)
-
-    print("\n===== 최종 결과 =====")
-
-    total = GAMES
-    print(f"Player 1 승: {results['player1_win']}")
-    print(f"Player 2 승: {results['player2_win']}")
-    print(f"무승부: {results['draw']}")
-
-    print("\n승률")
-    print(f"Player 1: {results['player1_win']/total*100:.1f}%")
-    print(f"Player 2: {results['player2_win']/total*100:.1f}%")
+    run_arena(NEW_MODEL, OLD_MODEL, total_games=10) # 10판 정도 대결

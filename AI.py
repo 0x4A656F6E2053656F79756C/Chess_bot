@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import math
 import random
 import time
+from config import device
 
 # ==========================================
 # 1. 보드 & 이동 매핑 유틸리티
@@ -282,7 +283,7 @@ class AIPlayer:
 
 class CNNPlayer(AIPlayer):
     def __init__(self, model_path):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         print(f"[CNN 직관 봇] {model_path} 로딩 중... (장치: {self.device})")
         self.model = TwoHeadChessCNN().to(self.device) 
         try:
@@ -314,7 +315,7 @@ class CNNPlayer(AIPlayer):
 
 class MCTSPlayer(AIPlayer):
     def __init__(self, model_path, simulations=100, explore_moves=20, add_noise=True):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         print(f"[MCTS 수읽기 봇] {model_path} 로딩 중... (장치: {self.device})")
         self.model = TwoHeadChessCNN().to(self.device)
         try:

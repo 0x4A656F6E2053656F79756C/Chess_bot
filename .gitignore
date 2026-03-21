@@ -1,0 +1,5 @@
+_pycache_/
+chrome_data/
+dataset_selfplay/
+notes/
+*.pyc
