@@ -8,7 +8,7 @@ import multiprocessing as mp
 import os
 import time
 import glob
-import csvr
+import csv
 import urllib.request # 🔔 ntfy 알림 전송용 내장 라이브러리 추가
 import re
 
