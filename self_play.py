@@ -228,7 +228,7 @@ def run_alphazero_pipeline(initial_model="model/model_v5.pth", output_dir="datas
         print(f"🚀 [Iteration {iteration}] 자가 대국(Self-Play) 데이터 생성 시작")
         print(f"==================================================")
         
-        num_workers = max(1, mp.cpu_count() - 2)
+        num_workers = max(1, mp.cpu_count() - 1)
         games_per_worker = games_per_iteration // num_workers
         
         lock = mp.Lock()
