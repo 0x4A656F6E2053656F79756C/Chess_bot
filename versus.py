@@ -81,4 +81,4 @@ if __name__ == "__main__":
     OLD_MODEL = "model/model_v2.pth"
     NEW_MODEL = "model/model_v5.pth"
 
-    run_arena(NEW_MODEL, OLD_MODEL, total_games=10) # 10판 정도 대결
+    run_arena(NEW_MODEL, OLD_MODEL, total_games=20) # 20판 정도 대결

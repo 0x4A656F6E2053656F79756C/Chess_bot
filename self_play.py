@@ -49,6 +49,8 @@ class SelfPlayDataset(Dataset):
 # 2. 자가 대국 워커 (데이터 생성)
 # =========================================================================
 def self_play_worker(worker_id, model_path, num_games, output_dir, simulations, lock, shared_chunk_counter):
+    # 각 워커 프로세스가 CPU 스레드를 딱 1개만 쓰도록 제한
+    torch.set_num_threads(1)
     model = TwoHeadChessCNN().to(device)
     if os.path.exists(model_path):
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
