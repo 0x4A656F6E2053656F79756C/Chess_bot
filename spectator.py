@@ -57,6 +57,7 @@ class ChessSpectator:
         self.mcts = ChessMCTS(model=self.model, device=self.device, num_simulations=10)
         self.game = None 
         self.running = False
+        self.synced_move_count = 0  # 보드와 MCTS의 동기화 상태를 추적할 변수
 
         if self.mode == '1':
             chrome_options = Options()
@@ -106,7 +107,7 @@ class ChessSpectator:
         else:
             print("\n✅ 로컬 직접 두기 모드로 시작합니다.")
 
-    # 🌟 수 인식 및 MCTS 동기화 로직을 하나로 통합
+    # 수 인식 및 MCTS 동기화 로직을 하나로 통합
     def monitor_moves(self):
         last_move_count = 0
         while self.running and not self.game.game_over:
@@ -133,27 +134,46 @@ class ChessSpectator:
                     # 로컬 분석 모드: GUI 보드 감시
                     with self.lock:
                         current_move_count = len(self.game.board.move_stack)
+                        
+                        # 1. 일반적인 수 진행 감지
                         if current_move_count > last_move_count:
                             for i in range(last_move_count, current_move_count):
                                 move = self.game.board.move_stack[i]
                                 self.mcts.update_with_move(move)
-                                print(f"🎯 둔 수 인식: {self.game.board.san(move) if i < len(self.game.board.move_stack)-1 else move}")
+                                print(f"🎯 둔 수 인식: {move.uci()}")
                             last_move_count = current_move_count
+                            self.synced_move_count = current_move_count
+                            
+                        # 🌟 2. 무르기(Undo) 감지 및 MCTS 초기화
+                        elif current_move_count < last_move_count:
+                            print("↩️ 무르기(Undo) 감지: MCTS 트리를 현재 보드 상태에 맞춰 초기화합니다.")
+                            # MCTS 객체를 새로 생성하여 깔끔하게 트리 리셋
+                            self.mcts = ChessMCTS(model=self.model, device=self.device, num_simulations=10)
+                            # GUI 플레이어에도 새로운 MCTS 객체 참조 전달
+                            self.spectator_player.mcts = self.mcts
+                            
+                            last_move_count = current_move_count
+                            self.synced_move_count = current_move_count
+                            
             except Exception as e:
                 print(f"⚠️ 수 인식 에러: {e}")
-            time.sleep(0.1 if self.mode == '2' else 0.5) # 분석 모드는 더 빠르게 수 인식
+            time.sleep(0.1 if self.mode == '2' else 0.5)
 
-    # 🌟 연속 분석 로직 (히트맵 갱신을 위해 상시 실행)
+    # 연속 분석 로직 (히트맵 갱신을 위해 상시 실행)
     def analyze_continuously(self):
         while self.running and not self.game.game_over:
             with self.lock:
                 if not self.game.board.is_game_over():
-                    board_copy = self.game.board.copy()
-                    try:
-                        self.mcts.search(board_copy, add_noise=False, temperature=0.0)
-                    except Exception as e:
-                        print(f"⚠️ 분석 스레드 에러: {e}")
-            time.sleep(0.05) # 히트맵이 자연스럽게 갱신되도록 대기
+                    # 2번 모드에서 GUI의 보드와 MCTS의 동기화가 아직 안 끝났다면 탐색 스킵
+                    if self.mode == '2' and len(self.game.board.move_stack) > self.synced_move_count:
+                        pass 
+                    else:
+                        board_copy = self.game.board.copy()
+                        try:
+                            self.mcts.search(board_copy, add_noise=False, temperature=0.0)
+                        except Exception as e:
+                            print(f"⚠️ 분석 스레드 에러: {e}")
+            time.sleep(0.05)
 
     def start(self):
         print("\n✅ 준비 완료!")
@@ -164,7 +184,6 @@ class ChessSpectator:
 
         print("\n🖥️ 체스판 GUI를 띄웁니다...")
         
-        # 🌟 둘 다 SpectatorPlayer 사용, spectator_mode=True로 보드 형태 통일
         self.spectator_player = SpectatorPlayer(self.mcts)
         self.game = ChessGame(
             white_player=self.spectator_player, 
@@ -177,7 +196,6 @@ class ChessSpectator:
         self.game.show_eval = True
         self.running = True
 
-        # 분석 스레드 및 수 인식 스레드 실행
         analyze_thread = threading.Thread(target=self.analyze_continuously, daemon=True)
         analyze_thread.start()
         monitor_thread = threading.Thread(target=self.monitor_moves, daemon=True)
@@ -191,7 +209,6 @@ class ChessSpectator:
             self.driver.quit()
             print("📺 관전을 종료합니다.")
         else:
-            # 로컬 분석 모드 종료 시 기보 저장
             os.makedirs("notes", exist_ok=True)
             pgn_game = chess.pgn.Game.from_board(self.game.board)
             pgn_game.headers["Event"] = "Local Human Analysis Match"
