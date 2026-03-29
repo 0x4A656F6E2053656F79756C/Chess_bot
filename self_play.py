@@ -9,11 +9,31 @@ import os
 import time
 import glob
 import csv
-import urllib.request # 🔔 ntfy 알림 전송용 내장 라이브러리 추가
+import urllib.request
 import re
+import logging
 
 from AI import TwoHeadChessCNN, ChessMCTS, board_to_tensor, MOVE_TO_ID
 from config import device
+
+# =========================================================================
+# 0. 로깅 설정 (파일과 콘솔 동시 출력)
+# =========================================================================
+logger = logging.getLogger("ChessPipeline")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+file_handler = logging.FileHandler("pipeline_log.txt", encoding='utf-8')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+def print(*args, **kwargs):
+    msg = " ".join(map(str, args))
+    logger.info(msg)
 
 # =========================================================================
 # 🔔 ntfy 알림 전송 도우미 함수
@@ -22,7 +42,6 @@ def send_ntfy_notification(message, topic="raspberry_4b"):
     try:
         url = f"https://ntfy.sh/{topic}"
         req = urllib.request.Request(url, data=message.encode('utf-8'), method="POST")
-        # 한글 깨짐 방지를 위해 헤더 추가
         req.add_header("Title", "Chess AI Pipeline")
         req.add_header("Tags", "chess_pawn,robot")
         urllib.request.urlopen(req, timeout=5)
@@ -30,13 +49,13 @@ def send_ntfy_notification(message, topic="raspberry_4b"):
         print(f"⚠️ ntfy 알림 전송 실패: {e}")
 
 # =========================================================================
-# 1. 자가 대국 전용 데이터셋 (확률 분포 지원)
+# 1. 자가 대국 전용 데이터셋
 # =========================================================================
 class SelfPlayDataset(Dataset):
     def __init__(self, npz_file):
         data = np.load(npz_file)
         self.X = torch.from_numpy(data['X'])
-        self.Y = torch.from_numpy(data['Y']).float() # 4224차원 확률 분포
+        self.Y = torch.from_numpy(data['Y']).float()
         self.Z = torch.from_numpy(data['Z']).float().unsqueeze(1) 
 
     def __len__(self):
@@ -49,7 +68,6 @@ class SelfPlayDataset(Dataset):
 # 2. 자가 대국 워커 (데이터 생성)
 # =========================================================================
 def self_play_worker(worker_id, model_path, num_games, output_dir, simulations, lock, shared_chunk_counter):
-    # 각 워커 프로세스가 CPU 스레드를 딱 1개만 쓰도록 제한
     torch.set_num_threads(1)
     model = TwoHeadChessCNN().to(device)
     if os.path.exists(model_path):
@@ -135,12 +153,14 @@ def self_play_worker(worker_id, model_path, num_games, output_dir, simulations, 
 # =========================================================================
 # 3. 자가 대국 전용 학습 로직
 # =========================================================================
-def train_selfplay_model(data_dir="dataset_selfplay", batch_size=4096, epochs=1, lr=0.0005, pretrained_path=None, iteration=1):
+def train_selfplay_model(data_dir="dataset_selfplay", batch_size=4096, epochs=1, lr=0.0001, pretrained_path=None, iteration=1):
     if device.type == 'cuda': torch.backends.cudnn.benchmark = True
 
     model = TwoHeadChessCNN(hidden_channels=256, num_res_blocks=20).to(device)
     criterion_policy = nn.CrossEntropyLoss() 
     criterion_value = nn.MSELoss() 
+    
+    # 학습률 0.0001 적용
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     log_file = "selfplay_training_log.csv"
@@ -198,10 +218,6 @@ def train_selfplay_model(data_dir="dataset_selfplay", batch_size=4096, epochs=1,
     os.makedirs("model", exist_ok=True)
     save_path = f"model/chess_selfplay_iter_{iteration}_FINAL.pth"
     torch.save({'iteration': iteration, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, save_path)
-    
-    for npz_file in npz_files:
-        try: os.remove(npz_file)
-        except OSError: pass
 
 # =========================================================================
 # 4. 파이프라인 무한 루프 
@@ -210,18 +226,23 @@ def run_alphazero_pipeline(initial_model="model/model_v5.pth", output_dir="datas
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs("model", exist_ok=True)
     
-    # 🌟 [수정] 기존에 학습된 가장 최신 이터레이션 모델 찾기
+    # 🌟 버퍼 크기 설정 (약 100만 개의 포지션 데이터 유지)
+    MAX_BUFFER_CHUNKS = 1000 
+    
     latest_models = glob.glob(f"model/chess_selfplay_iter_*_FINAL.pth")
     
     if latest_models:
         current_model = max(latest_models, key=os.path.getctime)
-        # 파일명에서 숫자 추출 (예: iter_5 -> 5)
         match = re.search(r'iter_(\d+)', os.path.basename(current_model))
         iteration = int(match.group(1)) + 1 if match else 1
         print(f"🔄 기존 기록 발견! Iteration {iteration}부터 재개합니다. (기존 모델: {current_model})")
     else:
         current_model = initial_model
         iteration = 1
+        
+    # 🌟 프로그램 시작/재시작 시점의 청크 개수를 파악하여 다음 1000개 단위 알림 기준점 설정
+    initial_chunks = len(glob.glob(os.path.join(output_dir, "selfplay_chunk_*.npz")))
+    next_notify_chunk = ((initial_chunks // 1000) + 1) * 1000
     
     while True:
         print(f"\n==================================================")
@@ -244,27 +265,48 @@ def run_alphazero_pipeline(initial_model="model/model_v5.pth", output_dir="datas
         for p in workers:
             p.join()
 
-        # 🔔 조건: 1회차 또는 10의 배수 회차일 때 (10, 20, 30...) 데이터 생성 완료 및 학습 시작 알림 전송
-        should_notify = (iteration == 1 or iteration % 10 == 0)
+        # 현재 수집된 청크 개수 확인
+        npz_files = sorted(glob.glob(os.path.join(output_dir, "selfplay_chunk_*.npz")))
+        current_chunks = len(npz_files)
 
-        if should_notify:
-            send_ntfy_notification(f"🚀 [Iteration {iteration}] 자가 대국 데이터 생성 완료. 모델 학습을 시작합니다!")
+        # 슬라이딩 윈도우 로직 (오래된 데이터 삭제)
+        if current_chunks > MAX_BUFFER_CHUNKS:
+            files_to_delete = npz_files[:-MAX_BUFFER_CHUNKS]
+            print(f"🧹 슬라이딩 윈도우 적용: 버퍼 초과. 오래된 데이터 {len(files_to_delete)}개를 삭제합니다.")
+            for f in files_to_delete:
+                try: os.remove(f)
+                except OSError as e: print(f"⚠️ 파일 삭제 실패: {f} ({e})")
+            current_chunks = MAX_BUFFER_CHUNKS # 삭제 후 개수 보정
 
-        print(f"\n✅ [Iteration {iteration}] 자가 대국 완료. 학습을 시작합니다.")
+        # 🌟 버퍼 웜업(충전) 대기 로직
+        if current_chunks < MAX_BUFFER_CHUNKS:
+            print(f"⏳ 데이터 수집 중... (현재 버퍼: {current_chunks}/{MAX_BUFFER_CHUNKS} 청크)")
+            
+            # 버퍼가 차는 동안에는 1000개 단위 돌파 시에만 알림 전송
+            if current_chunks >= next_notify_chunk:
+                send_ntfy_notification(f"⏳ [버퍼 충전 중] 현재 데이터가 {current_chunks}개에 도달했습니다! ({current_chunks}/{MAX_BUFFER_CHUNKS})")
+                next_notify_chunk = ((current_chunks // 1000) + 1) * 1000 # 다음 알림 기준 업데이트
+                
+            iteration += 1
+            continue # 버퍼가 꽉 찰 때까지 모델 학습을 건너뜀
+
+        # 🌟 버퍼가 꽉 찬 이후(학습 단계): 매 이터레이션 시작 시 알림
+        send_ntfy_notification(f"🚀 [Iteration {iteration}] 자가 대국 완료 (버퍼 100%). 모델 학습을 시작합니다!")
+
+        print(f"\n✅ [Iteration {iteration}] 버퍼 준비 완료. 학습을 시작합니다.")
 
         # 모델 학습 진행
         train_selfplay_model(
             data_dir=output_dir, 
             batch_size=1024, 
             epochs=epochs_per_train, 
-            lr=0.0005, 
+            lr=0.0001, 
             pretrained_path=current_model,
             iteration=iteration
         )
         
-        # 🔔 학습이 끝나면 완료 알림 전송
-        if should_notify:
-            send_ntfy_notification(f"✅ [Iteration {iteration}] 모델 학습 및 저장 완료! 다음 사이클을 준비합니다.")
+        # 🌟 버퍼가 꽉 찬 이후(학습 단계): 매 이터레이션 종료 시 알림
+        send_ntfy_notification(f"✅ [Iteration {iteration}] 모델 학습 및 저장 완료! 다음 사이클을 준비합니다.")
 
         latest_models = glob.glob(f"model/chess_selfplay_iter_*_FINAL.pth")
         if latest_models:
