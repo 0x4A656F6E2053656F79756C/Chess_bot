@@ -164,26 +164,14 @@ class ChessSpectator:
 
         print("\n🖥️ 체스판 GUI를 띄웁니다...")
         
-        # 🌟 둘 다 SpectatorPlayer 사용
+        # 🌟 둘 다 SpectatorPlayer 사용, spectator_mode=True로 보드 형태 통일
         self.spectator_player = SpectatorPlayer(self.mcts)
         self.game = ChessGame(
             white_player=self.spectator_player, 
             black_player=self.spectator_player, 
             model_path=self.model_path,
-            spectator_mode=(self.mode == '1') 
+            spectator_mode=(self.mode == '1')
         )
-
-        if self.mode == '2':
-            # 1. 주사율 강제 다운 (10Hz)
-            orig_tick = self.game.clock.tick
-            self.game.clock.tick = lambda fps: orig_tick(10)
-
-            # 2. 1번 모드처럼 컨트롤 패널 강제 렌더링
-            orig_draw = self.game.draw
-            def patched_draw():
-                orig_draw()
-                self.game.draw_control_panel()
-            self.game.draw = patched_draw
         
         self.game.show_heatmap = True
         self.game.show_eval = True
