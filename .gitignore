@@ -3,3 +3,6 @@ chrome_data/
 dataset_selfplay/
 notes/
 *.pyc
+new/*.pgn
+new/*.pth
+new/*.csv
